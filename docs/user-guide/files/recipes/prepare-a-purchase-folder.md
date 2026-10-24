@@ -6,7 +6,7 @@
 **Uses:** Settings → Automatic tagging, Cleanup (optional), File organization, Incoming → Add watch folder.
 **Works on:** Any folder of supported audio files. The example is `~/Music/Beatport`, 26 FLAC purchases.
 **Time:** About five minutes to set up; preparation then runs in the background.
-**Undo:** Your files stay where they are. Each original is backed up before tags are written (Recovery backups under Settings → Automatic tagging); see [Undo a tag change](../../tagging/tag-history.md).
+**Undo:** Your files stay where they are. Each original is held while its tags are written and deleted when the write is done, and automatic tagging has no Undo button; correct a tag with [Undo a tag change](../../tagging/tag-history.md) or by hand.
 </div>
 
 ## The problem

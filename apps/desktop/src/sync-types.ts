@@ -28,7 +28,7 @@ export interface CaseRenameChange {from:NativePath;to:NativePath}
 export interface SyncPreview {renames?:CaseRenameChange[];deleted_playlists:number;retained_external_playlists:number;id:string;target:SyncTarget;tracks:number;playlists:number;bytes_to_write:number;files:FileChange[];warnings:string[];directories:DirectoryChange[]}
 export type JournalState="prepared"|"applying"|"applied"|"restoring"|"restored";
 export interface FileJournal {renames?:CaseRenameChange[];id:string;state:JournalState;changes:FileChange[];directories:DirectoryChange[]}
-export interface DjSyncHistoryEntry {needs_acknowledgement:boolean;needs_restore_acknowledgement:boolean;id:string;state:JournalState|null;target:SyncTarget|null;tracks:number;playlists:number;created:number|null;error:string|null}
+export interface DjSyncHistoryEntry {needs_acknowledgement:boolean;needs_restore_acknowledgement:boolean;id:string;state:JournalState|null;target:SyncTarget|null;tracks:number;playlists:number;created:number|null;error:string|null;restore_expired?:boolean}
 export const syncTargets:{id:DjSoftware;name:string;location:string}[]=[
   {id:"virtual_dj",name:"VirtualDJ",location:"VirtualDJ library folder"},
   {id:"engine_dj",name:"Engine DJ",location:"Engine Library folder or target drive"},

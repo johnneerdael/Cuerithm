@@ -181,7 +181,7 @@ Use the search box (press ++s++ or ++slash++) to find a topic in this guide.
 
 ## How CueRithm treats your files { #your-files }
 
-Analysis and cue generation run offline. Only the optional catalog tagging uses the network. Your audio files stay where they are unless you turn on file organisation or review and apply a maintenance action. Tag writes use a staged copy: CueRithm verifies that the playable audio is unchanged, keeps the original and swaps the files atomically. Read [How are tags written safely?](how-it-works/tag-writing.md) and [Where CueRithm keeps your data](files/library/where-data-lives.md).
+Analysis and cue generation run offline. Only the optional catalog tagging uses the network. Your audio files stay where they are unless you turn on file organisation or review and apply a maintenance action. Tag writes use a staged copy: CueRithm verifies that the playable audio is unchanged, holds the original until the write has settled and swaps the files atomically. Read [How are tags written safely?](how-it-works/tag-writing.md) and [Where CueRithm keeps your data](files/library/where-data-lives.md).
 
 CueRithm uses [OneTagger](help/about/credits.md#onetagger), FFmpeg, TagLib and other open-source components. Mixed In Key and Lexicon DJ shaped how it behaves; the owner studied them using copies they own and wrote an independent implementation in Rust. Read [how CueRithm was made](help/about/provenance.md).
 

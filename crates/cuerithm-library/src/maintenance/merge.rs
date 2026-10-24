@@ -311,6 +311,7 @@ impl Library {
             "INSERT INTO maintenance_scans VALUES(?1,'duplicate_merge_plan',?2,?3)",
             params![public.id, serde_json::to_string(&saved)?, public.created],
         )?;
+        super::saved::prune(&tx)?;
         tx.commit()?;
         Ok(public)
     }

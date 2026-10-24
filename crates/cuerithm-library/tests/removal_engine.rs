@@ -467,15 +467,42 @@ fn give_everything(f: &Fixture, id: &str, hash: &str) {
              INSERT OR IGNORE INTO preparation_analysis VALUES('{hash}','settings','engine','decoder','{{}}');
              INSERT INTO preparation_match_generations(track_id,job_id,generation,attempt,source_hash,settings_revision,payload_json,created)
                VALUES('{id}',NULL,'gen-{id}',1,'{hash}',(SELECT revision FROM selected_settings),'{{}}',0);
-             INSERT INTO preparation_review_artwork(generation,candidate_id,url_digest,asset_json) VALUES('gen-{id}','c','d','{{}}');"
+             INSERT INTO preparation_review_artwork(generation,candidate_id,url_digest,asset_json) VALUES('gen-{id}','c','d','{{}}');
+             INSERT INTO preparation_review_artwork(generation,candidate_id,url_digest,asset_json) VALUES('gen-old-{id}','c','d','{{}}');
+             INSERT OR IGNORE INTO playlists(id,kind,name,position,last_edit_id) VALUES('smart','smartlist','Smart',0,'edit');
+             INSERT INTO smart_playlist_members VALUES('smart','{id}',0);
+             INSERT INTO curation_native_stale VALUES('{id}');
+             INSERT INTO preparation_reuse SELECT id,source_hash,'{hash}',(SELECT revision FROM selected_settings) FROM jobs WHERE track_id='{id}' LIMIT 1;
+             INSERT INTO preparation_match_previews VALUES('preview-{id}','{id}','gen-{id}','1','{{}}','preview',0);
+             INSERT INTO maintenance_fingerprints VALUES('{id}','engine-from-an-earlier-release','{hash}','{{}}',0);
+             INSERT INTO maintenance_scans VALUES('unused-{id}','unused','{{\"references\":[\"{id}\"]}}',0);"
         ),
     );
+    // The test is only meaningful if every kind of derived row exists before the removal.
+    for table in DERIVED {
+        assert!(
+            count(f, &format!("SELECT COUNT(*) FROM {table}")) > 0,
+            "the test must create a {table} row"
+        );
+    }
 }
+
+/// The per-track tables a removal deletes without saving them for Undo, because they are caches
+/// or flags that are rebuilt on demand (`maintenance/purge.rs`).
+const DERIVED: [&str; 5] = [
+    "maintenance_fingerprints",
+    "smart_playlist_members",
+    "curation_native_stale",
+    "preparation_reuse",
+    "preparation_match_previews",
+];
 
 /// Every place in the library that still names a track, its file or its content, other than
 /// the history lines that are meant to say what happened.
 fn traces(f: &Fixture, needles: &[String]) -> Vec<String> {
-    const HISTORY: [&str; 2] = ["maintenance_scans", "maintenance_writes"];
+    // The merge journal keeps the image Undo needs for the newest ten removals; the repair history
+    // keeps one summary line per repair. Every other saved report or preview is searched too.
+    const HISTORY: [&str; 1] = ["maintenance_writes"];
     let conn = rusqlite::Connection::open(&f.db).unwrap();
     let tables: Vec<String> = conn
         .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
@@ -493,12 +520,17 @@ fn traces(f: &Fixture, needles: &[String]) -> Vec<String> {
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap();
+        let scope = if table == "maintenance_scans" {
+            " AND kind!='missing_repair'"
+        } else {
+            ""
+        };
         for column in columns {
             for needle in needles {
                 let hits: i64 = conn
                     .query_row(
                         &format!(
-                            "SELECT COUNT(*) FROM \"{table}\" WHERE instr(CAST(\"{column}\" AS TEXT), ?1)>0"
+                            "SELECT COUNT(*) FROM \"{table}\" WHERE instr(CAST(\"{column}\" AS TEXT), ?1)>0{scope}"
                         ),
                         [needle],
                         |r| r.get(0),
@@ -736,6 +768,7 @@ fn a_removal_leaves_nothing_derived_from_the_track_behind_whichever_way_it_happe
     assert_eq!(result.removed_ids, vec![copy.clone()]);
     let left = traces(&f, &[copy.clone(), hash_copy.clone(), copy_path.clone()]);
     assert!(left.is_empty(), "left behind by the merge: {left:#?}");
+    assert_nothing_derived_remains(&f, &copy);
     assert!(
         art.join(&hash_copy).exists(),
         "its cover stays for Undo until the saved records are dropped"
@@ -764,11 +797,44 @@ fn a_removal_leaves_nothing_derived_from_the_track_behind_whichever_way_it_happe
     f.lib.apply_missing_removal(&preview.id, &token()).unwrap();
     let left = traces(&f, &[id.clone(), hash_gone.clone(), gone_path]);
     assert!(left.is_empty(), "left behind by the removal: {left:#?}");
+    assert_nothing_derived_remains(&f, &id);
     assert!(art.join(&hash_gone).exists(), "the cover stays for Undo");
     assert_eq!(
         audio_files(&f),
         audio_before,
         "removing records never touches an audio file"
+    );
+}
+
+/// Nothing a removal does not need for Undo is left, in any of the derived tables, in the saved
+/// unused-file scan (it names every path the library refers to) or in review artwork of a
+/// generation no track holds any more.
+fn assert_nothing_derived_remains(f: &Fixture, track: &str) {
+    for table in DERIVED {
+        let rows = if table == "preparation_reuse" {
+            // Keyed by job: no row may outlive the job of the removed track.
+            "SELECT COUNT(*) FROM preparation_reuse WHERE job_id NOT IN (SELECT id FROM jobs)"
+                .to_owned()
+        } else {
+            format!("SELECT COUNT(*) FROM {table} WHERE track_id='{track}'")
+        };
+        assert_eq!(count(f, &rows), 0, "{table} still has rows of the track");
+    }
+    assert_eq!(
+        count(
+            f,
+            "SELECT COUNT(*) FROM maintenance_scans WHERE kind='unused'"
+        ),
+        0,
+        "the unused-file scan lists every path in the library"
+    );
+    assert_eq!(
+        count(
+            f,
+            "SELECT COUNT(*) FROM preparation_review_artwork WHERE generation NOT IN (SELECT generation FROM preparation_match_generations)"
+        ),
+        0,
+        "review artwork of a generation nobody holds"
     );
 }
 
@@ -951,4 +1017,288 @@ fn a_file_moved_inside_a_watch_folder_is_followed_so_it_is_neither_missing_nor_a
         f.lib.track_path(&f.ids[moved]).unwrap(),
         new.canonicalize().unwrap()
     );
+}
+
+/// A future table that names a track must be handled by the removal on purpose. A table that has
+/// a column pointing at a track is either reached by a required foreign key (the engine saves it
+/// for Undo and deletes it with the track), a derived table `purge.rs` deletes, a link the
+/// removal detaches, or the playlist order the caller rewrites. Anything else fails here until
+/// someone decides what removal does with it.
+#[test]
+fn every_table_that_names_a_track_is_accounted_for() {
+    use std::collections::{BTreeMap, BTreeSet};
+    // A DJ-library link or an imported item loses its library track and stays, as a record of
+    // what the DJ library holds.
+    const DETACHED: [&str; 2] = ["native_track_links", "import_items"];
+    const CALLER: [&str; 1] = ["playlist_members"];
+    let f = Fixture::empty();
+    let conn = rusqlite::Connection::open(&f.db).unwrap();
+    let tables: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    // table -> tables it requires (a NOT NULL column that is a foreign key to them)
+    let mut requires: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut names_a_track = BTreeSet::new();
+    for table in &tables {
+        let columns: Vec<(String, bool)> = conn
+            .prepare(&format!(
+                "SELECT name,\"notnull\" OR pk>0 FROM pragma_table_info('{table}')"
+            ))
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? == 1)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        if columns
+            .iter()
+            .any(|(name, _)| name == "track_id" || name == "local_track_id")
+        {
+            names_a_track.insert(table.clone());
+        }
+        let keys: Vec<(String, String)> = conn
+            .prepare(&format!(
+                "SELECT \"table\",\"from\" FROM pragma_foreign_key_list('{table}')"
+            ))
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        for (parent, from) in keys {
+            if columns
+                .iter()
+                .any(|(name, required)| *name == from && *required)
+            {
+                requires.entry(table.clone()).or_default().insert(parent);
+            }
+        }
+    }
+    // Everything the engine reaches from the track by required keys.
+    let mut reached = BTreeSet::from(["tracks".to_owned()]);
+    loop {
+        let more: Vec<String> = requires
+            .iter()
+            .filter(|(table, parents)| {
+                !reached.contains(*table) && parents.iter().any(|p| reached.contains(p))
+            })
+            .map(|(table, _)| table.clone())
+            .collect();
+        if more.is_empty() {
+            break;
+        }
+        reached.extend(more);
+    }
+    for table in DERIVED.iter().chain(&DETACHED).chain(&CALLER) {
+        assert!(
+            tables.iter().any(|t| t == table),
+            "{table} is listed as handled but no longer exists"
+        );
+    }
+    let unaccounted: Vec<&String> = names_a_track
+        .iter()
+        .filter(|t| {
+            *t != "tracks"
+                && !reached.contains(*t)
+                && !DERIVED.contains(&t.as_str())
+                && !DETACHED.contains(&t.as_str())
+                && !CALLER.contains(&t.as_str())
+        })
+        .collect();
+    assert!(
+        unaccounted.is_empty(),
+        "tables that name a track but that a removal would leave behind: {unaccounted:?}"
+    );
+    // The derived tables that hang off a track are reached by the keys too, so listing them as
+    // derived is what keeps them out of the Undo image.
+    for table in DERIVED {
+        assert!(
+            reached.contains(table) || names_a_track.contains(table),
+            "{table} is not attached to a track"
+        );
+    }
+}
+
+fn saved(f: &Fixture, kind: &str) -> i64 {
+    count(
+        f,
+        &format!("SELECT COUNT(*) FROM maintenance_scans WHERE kind='{kind}'"),
+    )
+}
+
+/// Scanning again and again, without ever starting a review, must not pile up either.
+#[test]
+fn scanning_over_and_over_keeps_only_the_newest_scans() {
+    let f = Fixture::new();
+    // Each kind is bounded by its own save, not only by whatever is saved next.
+    for _ in 0..6 {
+        std::thread::sleep(Duration::from_millis(3));
+        f.scan(Tolerance::None);
+    }
+    assert_eq!(saved(&f, "duplicates"), 3);
+    for _ in 0..6 {
+        std::thread::sleep(Duration::from_millis(3));
+        broken_report(&f);
+    }
+    assert_eq!(saved(&f, "broken"), 3);
+}
+
+/// Every scan listed the whole library again, and a review and a merge plan each embedded
+/// another copy. Only the newest few of each stay, and an older review that a plan still
+/// depends on stays with it.
+#[test]
+fn saved_scans_and_reviews_are_bounded_as_they_are_saved() {
+    let f = Fixture::new();
+    let first = f.review(Tolerance::None);
+    for _ in 0..6 {
+        std::thread::sleep(Duration::from_millis(3));
+        f.review(Tolerance::None);
+    }
+    assert_eq!(saved(&f, "duplicates"), 3);
+    assert_eq!(saved(&f, "duplicate_review"), 3);
+    assert!(
+        f.lib.duplicate_review(&first.id, &token()).is_err(),
+        "the oldest review is gone: scan again"
+    );
+    // A review that a saved plan was made from stays while the plan is one of the newest.
+    let newest = f.review(Tolerance::None);
+    f.lib
+        .preview_duplicate_merge_choice_with(
+            &newest.id,
+            newest.revision,
+            vec![newest.groups[0].id.clone()],
+            Some(MergeDisposition::Archive),
+            &Capable,
+            &token(),
+        )
+        .unwrap();
+    for _ in 0..4 {
+        std::thread::sleep(Duration::from_millis(3));
+        f.review(Tolerance::None);
+    }
+    assert!(f.lib.duplicate_review(&newest.id, &token()).is_ok());
+    assert_eq!(saved(&f, "duplicate_merge_plan"), 1);
+}
+
+/// Libraries made by earlier versions carry every scan they ever saved. Opening one trims them
+/// without touching the history lines or the reports a view still needs.
+#[test]
+fn a_library_with_many_old_saved_reports_is_trimmed_when_it_opens() {
+    let f = Fixture::empty();
+    let db = f.db.clone();
+    let (dir, runtime) = (f.dir, f.runtime);
+    drop(f.lib);
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let padding = "x".repeat(300_000);
+    for kind in [
+        "duplicates",
+        "duplicate_review",
+        "duplicate_merge_plan",
+        "broken",
+        "unused",
+        "unused_removal_plan",
+        "missing_repair",
+    ] {
+        for n in 0..9 {
+            conn.execute(
+                "INSERT INTO maintenance_scans VALUES(?1,?2,?3,?4)",
+                rusqlite::params![format!("{kind}-{n}"), kind, padding, n],
+            )
+            .unwrap();
+        }
+    }
+    drop(conn);
+    let before = std::fs::metadata(&db).unwrap().len();
+    let lib = cuerithm_library::Library::open(&db).unwrap();
+    drop(lib);
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let rows = |kind: &str| -> Vec<String> {
+        conn.prepare("SELECT id FROM maintenance_scans WHERE kind=?1 ORDER BY created")
+            .unwrap()
+            .query_map([kind], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    for kind in [
+        "duplicates",
+        "duplicate_review",
+        "duplicate_merge_plan",
+        "broken",
+        "unused",
+        "unused_removal_plan",
+    ] {
+        assert_eq!(
+            rows(kind),
+            [6, 7, 8].map(|n| format!("{kind}-{n}")),
+            "{kind}"
+        );
+    }
+    assert_eq!(rows("missing_repair").len(), 9, "history is never trimmed");
+    // The space comes back too: the library file shrinks on the same start.
+    let bytes = std::fs::metadata(&db).unwrap().len();
+    assert!(
+        bytes * 2 < before + 1_000_000,
+        "{before} bytes became {bytes}"
+    );
+    drop((dir, runtime));
+}
+
+/// Archive-only merges used to stay undoable for ever, with the library state they changed. They
+/// share the window of ten with the removals.
+#[test]
+fn an_archive_only_merge_leaves_the_undo_window_like_any_other() {
+    let mut f = Fixture::empty();
+    let stand_in = trash(&f);
+    let service = service(&f, &stand_in);
+    let mut merges = vec![];
+    for round in 0..12 {
+        std::thread::sleep(Duration::from_millis(3));
+        let keep = f.add_track(&format!("keep-{round}.wav"), 501 + 2 * round);
+        let copy_path = f.dir.path().join(format!("copy-{round}.wav"));
+        wav_with_extra_chunk(&copy_path, 501 + 2 * round);
+        let copy = f.import(copy_path);
+        let title = format!(
+            "Archived pair {round} {}",
+            [
+                "alpha", "bravo", "delta", "echo", "golf", "kilo", "lima", "oscar", "papa",
+                "romeo", "sierra", "tango"
+            ][round as usize]
+        );
+        sql(
+            &f,
+            &format!(
+                "UPDATE tracks SET title='{title}' WHERE id IN ('{}','{}')",
+                f.ids[keep], f.ids[copy]
+            ),
+        );
+        let review = f.review(Tolerance::None);
+        assert_eq!(review.groups.len(), 1, "round {round}");
+        let preview = f
+            .lib
+            .preview_duplicate_merge_choice_with(
+                &review.id,
+                review.revision,
+                vec![review.groups[0].id.clone()],
+                Some(MergeDisposition::Archive),
+                &Capable,
+                &token(),
+            )
+            .unwrap();
+        merges.push(
+            service
+                .apply_confirmed(&preview.id, false, &token())
+                .unwrap()
+                .id,
+        );
+    }
+    for (n, id) in merges.iter().enumerate() {
+        assert_eq!(merge_is_final(&f, id), n < 2, "merge {n}");
+    }
+    let error = service.undo(&merges[0], &token()).unwrap_err().to_string();
+    assert!(error.contains("no longer available"), "{error}");
+    assert!(service.undo(&merges[11], &token()).is_ok());
 }

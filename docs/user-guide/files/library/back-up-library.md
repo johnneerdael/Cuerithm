@@ -18,7 +18,7 @@ Use **Library backup** under TOOLS in the sidebar. The main panel creates portab
 | Playlist folders, ordinary membership, smart definitions and custom tags | Evaluated smart-playlist results, which are rebuilt |
 | Selected musical data and, by default, prior musical and analysis revisions | Runnable preparation jobs and executable Undo journals |
 | Portable analysis, cleanup and tagging preferences; library time zone and key-mixing mode | Provider credentials, watch-folder bindings, audio-device choices and DJ-library write permissions |
-| Source folder references and historical DJ-library observations | Retained original audio used by tag, cleanup or maintenance Undo |
+| Source folder references and historical DJ-library observations | Backup copies kept for restoring a sync, and the history of removed unused files |
 
 An archive can contain private track metadata and original folder references. Keep it on storage you trust. It is not encrypted. See [Where CueRithm keeps your data](where-data-lives.md#outside) for settings stored outside the library.
 
@@ -71,6 +71,6 @@ For its separate confirmation and next-launch workflow, see [Restore a same-inst
 - [Restore your library from a backup](restore-library.md#inspect)
 - [Reconnect moved files](find-missing-files.md#relocate)
 - [Where CueRithm keeps your data](where-data-lives.md#what-is-in-the-folder)
-- [Undo a merge or restore removed files](undo-maintenance.md#recover)
+- [Undo a merge or put back removed files](undo-maintenance.md#recover)
 
 <!-- verified: apps/desktop/src/views/LibraryBackup.tsx; PortableBackup.tsx; portable-backup-api.ts; apps/desktop/src-tauri/src/portable_commands.rs; crates/cuerithm-library/src/backup/{container,spool,projection}.rs; library_backup.rs; tests/portable_backup.rs; tests/library_backup.rs. Existing screenshot depicts the same-installation snapshot panel. -->

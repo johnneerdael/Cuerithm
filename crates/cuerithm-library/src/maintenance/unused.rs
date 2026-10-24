@@ -494,6 +494,7 @@ impl Library {
                 saved.report.created
             ],
         )?;
+        super::saved::prune(&tx)?;
         cancel.check()?;
         tx.commit()?;
         Ok(saved.report)

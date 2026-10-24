@@ -14,6 +14,15 @@ pub(super) fn captured(path: &Path) -> Result<ArtifactRestoreProof> {
         displaced: None,
     })
 }
+/// Whether the private file is still there. A backup that an earlier pass of the cleanup already
+/// retired (or whose private folder is gone) is not an error: it is what cleanup is for.
+fn present(proof: &ArtifactRestoreProof) -> bool {
+    let (Ok(path), Ok(parent)) = (proof.path.path(), NativeParent::reopen(&proof.parent)) else {
+        return false;
+    };
+    path.file_name()
+        .is_some_and(|leaf| parent.optional(Path::new(leaf)).ok().flatten().is_some())
+}
 fn verify(proof: &ArtifactRestoreProof) -> Result<()> {
     let path = proof.path.path()?;
     let parent = NativeParent::reopen(&proof.parent)?;
@@ -168,19 +177,20 @@ impl Library {
                     .private_backup
                     .as_ref()
                     .context("Missing original native backup receipt")?;
-                verify(backup)?;
-                publish_files::durable_assets(
-                    std::slice::from_ref(&backup.path.path()?),
-                    &journal.workspace,
-                    self.data_dir(),
-                )?;
+                // While the original still exists only as the displaced file, the backup must be
+                // intact. Once this cleanup has retired the backup, nothing needs it.
+                if present(backup) {
+                    verify(backup)?;
+                    publish_files::durable_assets(
+                        std::slice::from_ref(&backup.path.path()?),
+                        &journal.workspace,
+                        self.data_dir(),
+                    )?;
+                }
             }
             let mut proofs = authority.retired.clone();
             if let Some(stage) = &authority.private_staged {
                 proofs.push(stage.clone());
-            }
-            if !changed && let Some(backup) = &authority.private_backup {
-                proofs.push(backup.clone());
             }
             if changed {
                 for path in [&file.publish, &file.displaced] {
@@ -217,6 +227,11 @@ impl Library {
                     }
                 }
             }
+            // The original audio is kept only until the write has settled: the backup goes
+            // last, after the displaced original and every other private copy.
+            if let Some(backup) = &authority.private_backup {
+                proofs.push(backup.clone());
+            }
             let mut seen = std::collections::HashSet::new();
             for proof in proofs {
                 if seen.insert(proof.path.path()?)
@@ -233,6 +248,12 @@ impl Library {
             }
         }
         ensure!(errors.is_empty(), "{}", errors.join("; "));
+        // Every backup is gone. Say so in the journal and take the empty private folder away.
+        self.conn()?.execute(
+            "UPDATE tag_write_files SET backup=NULL WHERE write_id=?1",
+            [&journal.id],
+        )?;
+        let _ = std::fs::remove_dir(&journal.workspace);
         Ok(())
     }
     pub(super) fn rebind_restored_tag_execution(&self, journal: &Journal) -> Result<()> {

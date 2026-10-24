@@ -62,12 +62,14 @@ Direct rekordbox writes are enabled only for the two tested macOS application/sc
 | Scale acceptance | Full user-library maintenance, provider throughput, CPU/memory use and retained recovery-storage growth need larger-library measurement. Workers use 75% of available logical CPUs; that policy is not a proven optimum or utilization cap. | Reproducible large-library benchmarks and operation/recovery checks using copies. |
 | Optional future work | All-In-One structural/deep analysis remains research, not an integrated optional desktop add-on. | Native model/frontend/separation/postprocessing integration and a separately accepted optional workflow. |
 
-Preparation, manual cleanup and DJ Sync retain recovery backups. Sync history
-exposes guarded restore and interrupted-operation recovery; Serato sync backups
-include affected source audio, while Pioneer conversion protects the affected USB
-copies. Explicit disposal currently covers reviewed unused-file-removal backups; general
-preparation/cleanup backup retention management remains outstanding. Disk-space
-claims must distinguish logical backup deletion from filesystem snapshot storage.
+Preparation, manual cleanup and DJ Sync keep recovery copies only while an operation is
+under way. Undo of a tag write restores recorded tag values; it needs no copy of the audio.
+Sync history exposes guarded restore and interrupted-operation recovery for the newest ten
+syncs of each DJ program (older ones keep a summary and report that their backup was removed);
+Serato sync backups include affected source audio while those syncs are kept, and Pioneer
+conversion protects the affected USB copies. Reviewed unused-file removal moves files to the
+Trash. Disk-space claims must distinguish logical backup deletion from filesystem snapshot
+storage. See `docs/development/lean-library-audit.md` for every retention and its bound.
 
 The current application uses the existing CueRithm branding and Settings/table/player
 surfaces. Feature work extends those surfaces without replacing the theme.

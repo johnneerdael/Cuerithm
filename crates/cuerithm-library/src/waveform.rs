@@ -217,6 +217,8 @@ pub fn cached_waveform(
             .iter()
             .all(|b| b.min.is_finite() && b.max.is_finite() && b.min <= b.max)
     {
+        // Used now: the cache limit drops the files nobody asked for first.
+        crate::cache_limits::touch(&path);
         return Ok(value);
     }
     let value = waveform(audio, bins)?;

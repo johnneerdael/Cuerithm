@@ -127,6 +127,11 @@ describe("native rekordbox sync",()=>{
   fireEvent.click(screen.getByRole("button",{name:"Recover sync"}));await waitFor(()=>expect(api.recover).toHaveBeenCalledWith(expect.any(String),"interrupted"));fireEvent.click(screen.getAllByRole("button",{name:"Restore backup"})[0]);expect(api.restore).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button",{name:"Confirm restore"}));await waitFor(()=>expect(api.restore).toHaveBeenCalledWith(expect.any(String),"interrupted"));
  });
+ it("lists a sync whose backup was removed without offering to restore it",async()=>{
+  const api=bridge();vi.mocked(api.history).mockResolvedValue([{id:"old",target_id:target.id,status:"applied",created:1700000000000,updated:1700000000000,outcome:null,restore_available:false},{id:"new",target_id:target.id,status:"applied",created:1700000001000,updated:1700000001000,outcome:null,restore_available:true}]);await open(api);
+  await screen.findByText(/The backup was removed after ten newer syncs of this database/);
+  expect(screen.getAllByRole("button",{name:"Restore backup"})).toHaveLength(1);
+ });
  it("cancels active work without releasing the operation until it settles",async()=>{
   const api=bridge();let finish!:(p:RekordboxSyncPreview)=>void;vi.mocked(api.preview).mockImplementation(()=>new Promise(resolve=>{finish=resolve;}));await open(api);fireEvent.click(screen.getByRole("button",{name:"Preview rekordbox sync"}));
   await waitFor(()=>expect(api.preview).toHaveBeenCalled());const op=vi.mocked(api.preview).mock.calls[0][0];fireEvent.click(screen.getByRole("button",{name:"Cancel"}));await waitFor(()=>expect(api.cancel).toHaveBeenCalledWith(op));expect(screen.getByRole("button",{name:"Preview rekordbox sync"})).toBeDisabled();await act(async()=>finish(prepared("cancelled")));await waitFor(()=>expect(api.discard).toHaveBeenCalledWith("cancelled"));

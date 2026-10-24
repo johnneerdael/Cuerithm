@@ -139,7 +139,7 @@ Every change that touches your files or library has a way back, and a few have l
 | Applied a cleanup | **Undo** in the cleanup history | [Undo a cleanup](../tagging/undo-cleanup.md) |
 | Saved tag edits or applied a match | Edit history | [Undo a tag change](../tagging/tag-history.md) |
 | Reorganised files into folders | **Undo** or recovery in the organiser history | [Recover or undo a reorganisation](../rename/undo-organize.md) |
-| Merged duplicates, removed missing tracks or removed unused files | **History & recovery** in Maintenance | [Undo a merge or restore removed files](../files/library/undo-maintenance.md) |
+| Merged duplicates, removed missing tracks or removed unused files | **History & recovery** in Maintenance | [Undo a merge or put back removed files](../files/library/undo-maintenance.md) |
 | Synced to DJ software | **Restore backup** in the sync history | [Preview, apply and restore a sync](../sync/preview-apply-restore.md) |
 | Changed a cue, loop or beatgrid by hand | Undo in the corrections | [Undo or resolve a correction](../analysis/corrections/undo-corrections.md) |
 | Need the whole library back | A library backup | [Restore your library from a backup](../files/library/restore-library.md) |

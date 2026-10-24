@@ -4,7 +4,7 @@
 
 !!! abstract "What this means for you"
     - **Analysis is offline.** Key, BPM, beatgrid, energy, cues and waveform are calculated from the decoded audio. Tags, filenames and other apps' labels are never used as input to those results.
-    - **Analysis never changes your music files.** CueRithm writes to a file only when you switch tagging, cleanup or file organisation on, or save an edit. Before it does, it keeps the original.
+    - **Analysis never changes your music files.** CueRithm writes to a file only when you switch tagging, cleanup or file organisation on, or save an edit. While it writes, it holds the original until the write has settled.
     - **The numbers are measurements, not verdicts.** Check an unfamiliar track by ear, especially its key and cues. [How accurate is it?](accuracy.md) says exactly what has and has not been measured.
 
 ## Which page answers my question? { #your-question }

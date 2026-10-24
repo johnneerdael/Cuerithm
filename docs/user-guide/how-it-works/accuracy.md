@@ -50,7 +50,7 @@ The development tracks are one representative of each of 282 audio groups in the
 
 - Decoding stops at about 24 minutes, so long mixes do not prepare.
 - Windows and Linux builds are unsigned, and their native playback, import and restart acceptance is not complete. There is no Intel Mac build.
-- Large-library performance, memory use and the growth of retained recovery backups are unmeasured.
+- Large-library performance and memory use are unmeasured, and so is how long it takes to remove the copies that earlier versions kept from a very large library.
 - There is no auto-update.
 
 See [What CueRithm does not do yet](../help/not-available-yet.md) for the full list.

@@ -80,6 +80,6 @@ This format requires the same installation and compatible app/schema, with saved
 - [Back up your library](back-up-library.md#create)
 - [Reconnect missing or moved files](find-missing-files.md#relocate)
 - [Where CueRithm keeps your data](where-data-lives.md#what-is-in-the-folder)
-- [Undo a merge or restore removed files](undo-maintenance.md#recover)
+- [Undo a merge or put back removed files](undo-maintenance.md#recover)
 
 <!-- verified: apps/desktop/src/views/PortableBackup.tsx; LibraryBackup.tsx; portable-backup-api.ts; apps/desktop/src-tauri/src/portable_commands.rs; exit_commands.rs; host.rs; crates/cuerithm-library/src/generations.rs; backup/{spool,validate,lexicon,lexicon_stream}.rs; library_backup.rs; tests/library_generations.rs; tests/portable_backup.rs; tests/lexicon_spool.rs. Full real-machine migration and original private Lexicon sample acceptance remain separate from synthetic profile tests. -->

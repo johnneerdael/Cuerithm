@@ -899,7 +899,8 @@ fn delete_from_disk_with_a_donor_copies_tags_first_and_undo_restores_the_keepers
         )
         .unwrap();
     let keeper_before = hash(&f.paths[0]);
-    let before = f.content();
+    let keeper_state = f.file_state(0);
+    let before = f.content_ignoring_file_identity();
     let preview = preview(&f, &review, 0, MergeDisposition::Delete);
     assert_eq!(preview.plan.groups[0].copies.len(), 1);
     let stand_in = trash(&f);
@@ -921,11 +922,12 @@ fn delete_from_disk_with_a_donor_copies_tags_first_and_undo_restores_the_keepers
 
     service.undo(&result.id, &token()).unwrap();
     assert_eq!(
-        hash(&f.paths[0]),
-        keeper_before,
-        "the keeper's original bytes are restored"
+        f.file_state(0),
+        keeper_state,
+        "the keeper's previous tag values are back, and its audio is untouched"
     );
-    assert_eq!(f.content(), before);
+    f.assert_library_knows_file(0);
+    assert_eq!(f.content_ignoring_file_identity(), before);
     assert!(f.track_exists(&f.ids[1]));
 }
 
@@ -1503,6 +1505,7 @@ fn undo_refuses_before_touching_anything_when_a_different_file_sits_at_a_removed
         )
         .unwrap();
     let keeper_original = hash(&f.paths[0]);
+    let keeper_state = f.file_state(0);
     let preview = preview(&f, &review, 0, MergeDisposition::Delete);
     let stand_in = trash(&f);
     let service = service(&f, &stand_in);
@@ -1544,9 +1547,9 @@ fn undo_refuses_before_touching_anything_when_a_different_file_sits_at_a_removed
     std::fs::rename(moved_in_the_trash(&stand_in, "track-1.wav"), &f.paths[1]).unwrap();
     service.undo(&result.id, &token()).unwrap();
     assert_eq!(
-        hash(&f.paths[0]),
-        keeper_original,
-        "the keeper's original bytes are back"
+        f.file_state(0),
+        keeper_state,
+        "the keeper's previous tag values are back"
     );
     assert!(f.track_exists(&f.ids[1]));
 }

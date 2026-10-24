@@ -58,7 +58,7 @@ If the scan lists files you did not move, or the files are back in place and sti
 ## Related
 
 - [Find missing, moved or broken files](../../files/library/find-missing-files.md)
-- [Undo a merge or restore removed files](../../files/library/undo-maintenance.md#undo-repairs)
+- [Undo a merge or put back removed files](../../files/library/undo-maintenance.md#undo-repairs)
 - [Keep a folder like Beatport in your library](../../files/watch-folders.md)
 - [What CueRithm does not do yet: relocation and portable libraries](../not-available-yet.md#missing-and-moved-files)
 

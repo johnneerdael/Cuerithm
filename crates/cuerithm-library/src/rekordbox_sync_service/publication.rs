@@ -661,7 +661,10 @@ impl Library {
             return op.outcome.context("Applied native outcome missing");
         }
         let (key, _) = current_target(self, true, &op, cancel)?;
-        apply(self, &mut op, &key, cancel, &ensure_closed)
+        let outcome = apply(self, &mut op, &key, cancel, &ensure_closed)?;
+        // The oldest syncs of this target give up their backups.
+        let _ = retention::prune_locked(self, retention::RESTORE_LIMIT);
+        Ok(outcome)
     }
     pub fn restore_rekordbox_sync(
         &self,
@@ -678,7 +681,10 @@ impl Library {
             "Recover the interrupted native operation before restoring"
         );
         let (key, _) = current_target(self, false, &op, cancel)?;
-        restore_finish(self, &mut op, &key, cancel, &ensure_closed)
+        let outcome = restore_finish(self, &mut op, &key, cancel, &ensure_closed)?;
+        // A restored sync can never be restored again: it gives up its backup now.
+        let _ = retention::prune_locked(self, retention::RESTORE_LIMIT);
+        Ok(outcome)
     }
     pub fn recover_rekordbox_sync(
         &self,

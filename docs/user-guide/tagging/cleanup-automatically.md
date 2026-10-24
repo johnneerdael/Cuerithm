@@ -25,7 +25,7 @@ Cleanup is one step of [preparation in Incoming](../files/follow-incoming.md):
 3. It prepares the tags: catalog fields first, then any [edit you saved on this track](edit-tags-by-hand.md), then your cleanup rules.
 4. It writes the result into a staged copy of the file and checks that the audio is unchanged.
 5. [Cues are placed](../analysis/cue-rules.md). If cleanup changed the genre, placement uses the cleaned genre.
-6. The staged copy replaces the original file in one swap. The original is kept as a recovery backup.
+6. The staged copy replaces the original file in one swap. The original is kept only until the write has settled.
 7. Optional [file organization](../rename/organize-files.md) runs last, and the track moves into **Tracks**.
 
 You do not need automatic tagging for this. With tagging off, cleanup runs on the tags already in the file and nothing goes online. Cleanup never contacts a provider.

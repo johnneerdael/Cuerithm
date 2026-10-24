@@ -86,6 +86,19 @@ const TABLES: &[&str] = &[
     "djmdMyTag",
     "djmdSongMyTag",
 ];
+/// The record tables whose stored content later code reads back: the playlist and MyTag
+/// rows and their membership rows, which native playlist sync compares with what it bound.
+/// Every other table keeps only each record's identity and hash, enough to tell which records
+/// changed between two observations. The rekordbox database itself is the source of the
+/// rest, and every sync reads it again.
+pub(crate) const RECORD_CONTENT_TABLES: [&str; 4] = [
+    "djmdPlaylist",
+    "djmdSongPlaylist",
+    "djmdMyTag",
+    "djmdSongMyTag",
+];
+/// The stored `json` of a record whose content is not kept.
+const CONTENT_NOT_KEPT: &str = "";
 const TEXT_FIELDS: &[&str] = &[
     "title",
     "artist",
@@ -351,9 +364,12 @@ struct StoredLink {
     fields: Fields,
     status: String,
     observation_hash: Option<String>,
+    /// False for a row whose observation was not kept: only a DJ-software track that is
+    /// linked to a library track keeps its observation, the others keep its hash.
+    has_observation: bool,
 }
 fn links(conn: &Connection, target: &str) -> Result<BTreeMap<String, StoredLink>> {
-    let mut stmt=conn.prepare("SELECT content_id,local_track_id,identity_json,baseline_json,status,observation_hash FROM native_track_links WHERE target_id=?1")?;
+    let mut stmt=conn.prepare("SELECT content_id,local_track_id,identity_json,baseline_json,status,observation_hash,observation_json IS NOT NULL FROM native_track_links WHERE target_id=?1")?;
     let rows = stmt
         .query_map([target], |r| {
             Ok((
@@ -363,22 +379,26 @@ fn links(conn: &Connection, target: &str) -> Result<BTreeMap<String, StoredLink>
                 r.get::<_, String>(3)?,
                 r.get::<_, String>(4)?,
                 r.get::<_, Option<String>>(5)?,
+                r.get::<_, bool>(6)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
-        .map(|(id, local, identity, fields, status, observation_hash)| {
-            Ok((
-                id,
-                StoredLink {
-                    local,
-                    identity: serde_json::from_str(&identity)?,
-                    fields: serde_json::from_str(&fields)?,
-                    status,
-                    observation_hash,
-                },
-            ))
-        })
+        .map(
+            |(id, local, identity, fields, status, observation_hash, has_observation)| {
+                Ok((
+                    id,
+                    StoredLink {
+                        local,
+                        identity: serde_json::from_str(&identity)?,
+                        fields: serde_json::from_str(&fields)?,
+                        status,
+                        observation_hash,
+                        has_observation,
+                    },
+                ))
+            },
+        )
         .collect()
 }
 enum Candidate {
@@ -441,7 +461,12 @@ fn store_records(
             existing.remove(&(table.clone(), record.id.clone()));
             let json = serde_json::to_string(record)?;
             let digest = format!("{:x}", Sha256::digest(json.as_bytes()));
-            changed |= stmt.execute(params![target, table, record.id, json, digest])? > 0;
+            let kept = if RECORD_CONTENT_TABLES.contains(&table.as_str()) {
+                json.as_str()
+            } else {
+                CONTENT_NOT_KEPT
+            };
+            changed |= stmt.execute(params![target, table, record.id, kept, digest])? > 0;
         }
     }
     drop(stmt);
@@ -691,8 +716,9 @@ impl Library {
                     || l.status != status
                     || l.observation_hash.as_deref() != Some(observed_hash.as_str())
                     || l.fields != fields
+                    || (local.is_some() && !l.has_observation)
             }) {
-                tx.execute("INSERT INTO native_track_links(target_id,content_id,local_track_id,identity_json,observation_json,observation_hash,baseline_json,status,updated) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(target_id,content_id) DO UPDATE SET local_track_id=excluded.local_track_id,identity_json=excluded.identity_json,observation_json=excluded.observation_json,observation_hash=excluded.observation_hash,baseline_json=excluded.baseline_json,status=excluded.status,updated=excluded.updated",params![target,id,local,serde_json::to_string(&identity)?,serde_json::to_string(track)?,observed_hash,serde_json::to_string(&fields)?,status,crate::model::now()])?;
+                tx.execute("INSERT INTO native_track_links(target_id,content_id,local_track_id,identity_json,observation_json,observation_hash,baseline_json,status,updated) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(target_id,content_id) DO UPDATE SET local_track_id=excluded.local_track_id,identity_json=excluded.identity_json,observation_json=excluded.observation_json,observation_hash=excluded.observation_hash,baseline_json=excluded.baseline_json,status=excluded.status,updated=excluded.updated",params![target,id,local,serde_json::to_string(&identity)?,local.as_ref().map(|_| serde_json::to_string(track)).transpose()?,observed_hash,serde_json::to_string(&fields)?,status,crate::model::now()])?;
                 changed = true;
             }
             *report.statuses.entry(status.into()).or_default() += 1;
@@ -719,6 +745,10 @@ impl Library {
         report.changed = changed;
         cancel.check()?;
         tx.commit()?;
+        drop(conn);
+        if observation_changed {
+            self.tidy_after_bulk_change();
+        }
         Ok(report)
     }
     pub fn native_targets(&self) -> Result<Vec<NativeTargetState>> {
@@ -743,7 +773,7 @@ impl Library {
             [target],
             |r| r.get(0),
         )?;
-        let tracks=conn.query_row("SELECT COUNT(*) FROM native_track_links WHERE target_id=?1 AND observation_json IS NOT NULL",[target],|r|r.get(0))?;
+        let tracks=conn.query_row("SELECT COUNT(*) FROM native_track_links WHERE target_id=?1 AND observation_hash IS NOT NULL",[target],|r|r.get(0))?;
         let issues: String = conn.query_row(
             "SELECT issues_json FROM native_targets WHERE id=?1",
             [target],
@@ -778,8 +808,14 @@ impl Library {
         id: &str,
     ) -> Result<Option<TargetRecord>> {
         let json:Option<String>=self.conn()?.query_row("SELECT json FROM native_records WHERE target_id=?1 AND table_name=?2 AND record_id=?3",params![target,table,id],|r|r.get(0)).optional()?;
-        json.map(|s| serde_json::from_str(&s).map_err(Into::into))
-            .transpose()
+        json.map(|s| {
+            ensure!(
+                s != CONTENT_NOT_KEPT,
+                "The content of {table} records is not kept, only their identity and hash"
+            );
+            serde_json::from_str(&s).map_err(Into::into)
+        })
+        .transpose()
     }
 }
 

@@ -389,6 +389,21 @@ pub(crate) fn safe_ancestors(path: &Path) -> Result<()> {
     }
     Ok(())
 }
+/// Bytes in a file or folder of regular files; links are not followed and count for nothing.
+fn owned_size(path: &Path) -> u64 {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return 0;
+    };
+    if metadata.file_type().is_symlink() {
+        0
+    } else if metadata.is_dir() {
+        fs::read_dir(path)
+            .map(|rows| rows.flatten().map(|row| owned_size(&row.path())).sum())
+            .unwrap_or(0)
+    } else {
+        metadata.len()
+    }
+}
 pub(crate) fn durable_json(path: &Path, value: &impl Serialize) -> Result<()> {
     let parent = path.parent().context("Journal parent missing")?;
     let mut temp = tempfile::NamedTempFile::new_in(parent)?;
@@ -492,6 +507,59 @@ impl FileTransaction {
             "Only an unapplied sync preview can be discarded"
         );
         this.discard_payload(&journal)
+    }
+
+    /// Frees the copies a finished transaction keeps only for restoring it: the staged files and
+    /// the backups of what it replaced. The journal and the request stay, so the transaction
+    /// is still listed and can still be inspected; it can no longer be restored. Only a
+    /// transaction that was applied or restored is touched, and nothing outside its own
+    /// `staged` and `backup` folders. Returns how many bytes were freed.
+    pub fn expire_payload(journal_root: &Path, id: &str) -> Result<u64> {
+        let parsed = uuid::Uuid::parse_str(id).context("Invalid sync journal identity")?;
+        ensure!(parsed.to_string() == id, "Invalid sync journal identity");
+        let journal_root = match fs::canonicalize(journal_root) {
+            Ok(root) => root,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(error) => return Err(error).context("Resolve sync journal root"),
+        };
+        let this = Self {
+            root: journal_root.join(id),
+        };
+        safe_ancestors(&this.root)?;
+        let _lease = this.lock()?;
+        match fs::symlink_metadata(&this.root) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(error) => return Err(error.into()),
+            Ok(metadata) => ensure!(
+                metadata.is_dir() && !metadata.file_type().is_symlink(),
+                "Sync journal path is not a directory"
+            ),
+        }
+        let journal = this.inspect()?;
+        ensure!(journal.id == id, "Sync journal identity mismatch");
+        ensure!(
+            matches!(
+                journal.state,
+                JournalState::Applied | JournalState::Restored
+            ),
+            "Only a finished sync can give up its restore copies"
+        );
+        let mut freed = 0;
+        for folder in ["staged", "backup"] {
+            let folder = this.root.join(folder);
+            let Ok(metadata) = fs::symlink_metadata(&folder) else {
+                continue;
+            };
+            if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                continue;
+            }
+            for entry in fs::read_dir(&folder)? {
+                let path = entry?.path();
+                freed += owned_size(&path);
+                crate::private_cleanup::remove(&path)?;
+            }
+        }
+        Ok(freed)
     }
 
     fn discard_payload(&self, journal: &FileJournal) -> Result<()> {
@@ -1158,6 +1226,63 @@ mod tests {
         assert!(transaction.apply(|| Ok(())).is_err());
         assert_eq!(fs::read(&native).unwrap(), b"native before");
         assert!(FileTransaction::discard(&root.join("journals"), "../native.db").is_err());
+    }
+
+    #[test]
+    fn a_finished_sync_gives_up_its_restore_copies_but_keeps_its_journal_and_targets() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let journals = root.join("journals");
+        let native = root.join("native.db");
+        let staged = root.join("copy.db");
+        fs::write(&native, b"native before").unwrap();
+        fs::write(&staged, b"published after").unwrap();
+        let transaction = FileTransaction::create(&journals).unwrap();
+        transaction
+            .add(&native, file_hash(&native).unwrap(), Some(&staged))
+            .unwrap();
+        let id = transaction.inspect().unwrap().id;
+        // A prepared sync keeps everything: it can still be applied.
+        assert!(FileTransaction::expire_payload(&journals, &id).is_err());
+        assert!(transaction.path().join("staged/0").exists());
+        transaction.apply(|| Ok(())).unwrap();
+        assert!(transaction.path().join("backup/0").exists());
+        // An unrelated file beside the payload is never touched.
+        fs::write(transaction.path().join("request.json"), b"{}").unwrap();
+        fs::create_dir(transaction.path().join("build")).unwrap();
+        fs::write(transaction.path().join("build/kept"), b"other").unwrap();
+        let freed = FileTransaction::expire_payload(&journals, &id).unwrap();
+        // The backup of what was replaced and the staged copy of what was published.
+        assert_eq!(
+            freed,
+            (b"native before".len() + b"published after".len()) as u64
+        );
+        assert_eq!(fs::read(&native).unwrap(), b"published after");
+        assert_eq!(
+            fs::read_dir(transaction.path().join("backup"))
+                .unwrap()
+                .count(),
+            0
+        );
+        assert_eq!(
+            fs::read_dir(transaction.path().join("staged"))
+                .unwrap()
+                .count(),
+            0
+        );
+        assert!(transaction.path().join("request.json").exists());
+        assert!(transaction.path().join("build/kept").exists());
+        assert_eq!(transaction.inspect().unwrap().state, JournalState::Applied);
+        // Nothing is left to restore from.
+        assert!(transaction.restore(|| Ok(())).is_err());
+        assert_eq!(fs::read(&native).unwrap(), b"published after");
+        // Again, and for a transaction that is gone, is not an error.
+        assert_eq!(FileTransaction::expire_payload(&journals, &id).unwrap(), 0);
+        assert_eq!(
+            FileTransaction::expire_payload(&journals, &uuid::Uuid::new_v4().to_string()).unwrap(),
+            0
+        );
+        assert!(FileTransaction::expire_payload(&journals, "../native.db").is_err());
     }
 
     #[test]

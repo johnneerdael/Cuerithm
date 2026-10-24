@@ -144,6 +144,8 @@ pub(crate) fn copy_prepared(from: &Path, to: &Path, expected: &str) -> Result<()
     Ok(())
 }
 
+// Only the tag-writing paths (feature `autotag`) flush their private copies.
+#[cfg_attr(not(feature = "autotag"), allow(dead_code))]
 pub(crate) fn durable_assets(
     files: &[std::path::PathBuf],
     workspace: &Path,
@@ -178,6 +180,7 @@ pub(crate) fn durable_assets(
         Ok(())
     })
 }
+#[cfg_attr(not(feature = "autotag"), allow(dead_code))]
 fn durability_barrier(
     files: &[std::path::PathBuf],
     workspace: &Path,

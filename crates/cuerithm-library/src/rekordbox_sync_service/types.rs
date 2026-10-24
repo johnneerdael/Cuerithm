@@ -226,4 +226,6 @@ pub struct RekordboxSyncHistoryEntry {
     pub created: i64,
     pub updated: i64,
     pub outcome: Option<RekordboxSyncOutcome>,
+    /// False once the sync is older than the ten kept for restore: only its summary remains.
+    pub restore_available: bool,
 }

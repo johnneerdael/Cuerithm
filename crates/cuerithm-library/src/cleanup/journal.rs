@@ -242,14 +242,8 @@ fn commit_metadata(conn: &Connection, payload: &Payload, after: &str) -> Result<
     let artist = field(F::Artist, "artist");
     let album = field(F::Album, "album");
     let genre = field(F::Genre, "genre");
-    let metadata = if let Some(row) = target {
-        row["metadata_json"]
-            .as_str()
-            .context("Missing prior metadata")?
-            .to_owned()
-    } else {
-        serde_json::to_string(&payload.metadata)?
-    };
+    // The file the write produced is the one the track now has, whichever way it got its tags.
+    let metadata = serde_json::to_string(&payload.metadata)?;
     let cleanup = if let Some(row) = target {
         row["cleanup_json"].as_str().map(str::to_owned)
     } else {
@@ -271,6 +265,18 @@ fn commit_metadata(conn: &Connection, payload: &Payload, after: &str) -> Result<
             "Cleanup was already undone"
         );
     }
+    Ok(())
+}
+/// The write has settled and its private copies are gone: say so in the journal.
+fn retire(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE cleanup_write_files SET backup=NULL WHERE write_id=?1",
+        [id],
+    )?;
+    conn.execute(
+        "UPDATE cleanup_writes SET cleanup_complete=1 WHERE id=?1",
+        [id],
+    )?;
     Ok(())
 }
 pub(super) fn publish(lib: &Library, id: &str) -> Result<()> {
@@ -387,19 +393,13 @@ pub(super) fn publish(lib: &Library, id: &str) -> Result<()> {
                 id
             ],
         )?;
-        if rollback.is_ok() && cleanup_temporaries(&journal.files, lib.data_dir()).is_ok() {
-            conn.execute(
-                "UPDATE cleanup_writes SET cleanup_complete=1 WHERE id=?1",
-                [id],
-            )?;
+        if rollback.is_ok() && cleanup_temporaries(&journal.files, lib.data_dir(), true).is_ok() {
+            retire(&conn, id)?;
         }
         return Err(error);
     }
-    if cleanup_temporaries(&journal.files, lib.data_dir()).is_ok() {
-        conn.execute(
-            "UPDATE cleanup_writes SET cleanup_complete=1 WHERE id=?1",
-            [id],
-        )?;
+    if cleanup_temporaries(&journal.files, lib.data_dir(), true).is_ok() {
+        retire(&conn, id)?;
     }
     Ok(())
 }
@@ -446,11 +446,8 @@ impl Library {
         };
         for id in cleanup {
             let journal = load(self, &id)?;
-            if cleanup_temporaries(&journal.files, self.data_dir()).is_ok() {
-                self.conn()?.execute(
-                    "UPDATE cleanup_writes SET cleanup_complete=1 WHERE id=?1",
-                    [id],
-                )?;
+            if cleanup_temporaries(&journal.files, self.data_dir(), true).is_ok() {
+                retire(&*self.conn()?, &id)?;
             }
         }
         let batches = {

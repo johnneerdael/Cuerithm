@@ -28,7 +28,7 @@ Nine pages run down the left side: **Incoming**, **Cue generation**, **Automatic
 | Choose or reorder table columns | The **Columns** button at the end of the table header | [Show the columns you need](../analysis/choose-columns.md) |
 | Save a DJ-software destination | **Sync** in the sidebar | [Save a destination for next time](../sync/saved-destinations.md) |
 | Reuse a cue layout | **Edit cues & grid** in the player | [Reuse one cue layout on many tracks](../analysis/corrections/cue-templates.md) |
-| See how much space the original-file backups use | **Settings → Automatic tagging**, row **Recovery backups** | [Where CueRithm keeps your data](../files/library/where-data-lives.md#space) |
+| See the copies CueRithm holds while a tag write is under way | **Settings → Automatic tagging**, row **Recovery backups** | [Where CueRithm keeps your data](../files/library/where-data-lives.md#space) |
 
 ## Save a setting { #save }
 

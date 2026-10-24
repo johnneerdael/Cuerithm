@@ -72,7 +72,7 @@ The products named here (Beatport, Traxsource, rekordbox, Mixxx and the others) 
 | **Preparation preset** | A named bundle of cue, tagging, cleanup and naming rules that a watch folder can use. | [Save your setup as a preset](../files/presets.md) |
 | **Provider** | An online catalog or lookup service that automatic tagging asks, such as Beatport or Traxsource. | [Choose providers and fields to write](../tagging/choose-providers.md) |
 | **Ready** | A track whose preparation finished completely. Ready tracks are in Tracks. | [Status icons and job states](status-icons.md) |
-| **Recovery backup** | A copy of a file's original tags and contents that CueRithm keeps before it writes tags, so the change can be undone. | [Undo a tag change](../tagging/tag-history.md) |
+| **Recovery backup** | A copy of a file that CueRithm holds while it writes tags, so an interrupted write can be rolled back. It is deleted when the write has settled. Undo uses recorded tag values instead. | [Undo a tag change](../tagging/tag-history.md) |
 | **Regular expression** | A pattern language for matching text. Smart playlists use the JavaScript flavour. | [Smart playlist fields and operators](smart-playlist-fields.md#cmp-regex) |
 | **Release (match a folder as a release)** | A single album or EP in a catalog. CueRithm can match a whole folder to one release. | [Match a folder as a release](../tagging/match-a-release.md) |
 | **rekordbox** | DJ software that CueRithm can write to directly, on compatible 6 and 7 builds. | [Sync to rekordbox 6 or 7](../sync/rekordbox-direct.md), [Check what works with your DJ software](../help/compatibility.md) |

@@ -129,41 +129,6 @@ pub(super) fn guard_missing(path: &Path, root: &Path) -> Result<()> {
     );
     Ok(())
 }
-pub(super) fn prepare(lib: &Library, op: &mut Operation, cancel: &CancellationToken) -> Result<()> {
-    let root = bytes_path(&op.root)?;
-    for index in (0..op.directories.len()).rev() {
-        cancel.check()?;
-        let path = bytes_path(&op.directories[index].path)?;
-        guard_missing(&path, &root)?;
-        if !missing(&path)? {
-            let _ = identity_kind(&path, true)?;
-            continue;
-        }
-        std::fs::create_dir(&path)?;
-        op.directories[index].restored = Some(identity_kind(&path, true)?);
-        crate::publish_files::sync_parent(&path)?;
-        save(&*lib.conn()?, op)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Some(mode) = op.directories[index].mode {
-                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))?;
-            }
-        }
-        #[cfg(windows)]
-        {
-            let mut permissions = std::fs::metadata(&path)?.permissions();
-            permissions.set_readonly(op.directories[index].readonly);
-            std::fs::set_permissions(&path, permissions)?;
-        }
-    }
-    Ok(())
-}
-pub(super) fn reset(folders: &mut [Folder]) {
-    for f in folders {
-        f.restored = None;
-    }
-}
 pub(super) fn cleanup(op: &Operation) -> Result<()> {
     #[cfg(test)]
     super::tests::before_folder_cleanup(op);

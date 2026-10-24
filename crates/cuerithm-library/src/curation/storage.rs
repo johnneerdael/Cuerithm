@@ -280,7 +280,7 @@ pub(super) fn discardable(conn: &Connection, active: Option<&str>) -> Result<boo
     let Some(active) = active else {
         return Ok(true);
     };
-    Ok(conn.query_row("SELECT EXISTS(SELECT 1 FROM curation_publications p WHERE p.id=?1 AND p.state IN ('error','recovery_required','waiting_incoming') AND NOT EXISTS(SELECT 1 FROM metadata_edit_writes w WHERE w.batch_id=p.child_batch_id AND w.state IN ('committed','undone')) AND NOT EXISTS(SELECT 1 FROM metadata_edit_overrides o JOIN jobs j ON j.id=o.job_id WHERE o.batch_id=p.child_batch_id AND (o.state IN ('committed','undone') OR j.state='running' OR EXISTS(SELECT 1 FROM tag_writes w WHERE w.job_id=o.job_id AND w.state='prepared'))))",[active],|row|row.get(0))?)
+    Ok(conn.query_row("SELECT EXISTS(SELECT 1 FROM curation_publications p WHERE p.id=?1 AND p.state IN ('error','recovery_required','waiting_incoming') AND NOT EXISTS(SELECT 1 FROM metadata_edit_writes w WHERE w.batch_id=p.child_batch_id AND w.state IN ('committed','undone')) AND NOT EXISTS(SELECT 1 FROM metadata_edit_overrides o JOIN jobs j ON j.id=o.job_id WHERE o.batch_id=p.child_batch_id AND (o.state IN ('committed','undone','expired') OR j.state='running' OR EXISTS(SELECT 1 FROM tag_writes w WHERE w.job_id=o.job_id AND w.state='prepared'))))",[active],|row|row.get(0))?)
 }
 pub(super) fn public(head: Head) -> CurationTrackState {
     CurationTrackState {
@@ -315,4 +315,46 @@ pub(super) fn apply_values(conn: &Connection, track: &str, values: &CurationValu
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod discard_tests {
+    use super::*;
+
+    fn conn(override_state: &str) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE curation_publications(id TEXT PRIMARY KEY,state TEXT,child_batch_id TEXT);
+             CREATE TABLE metadata_edit_writes(batch_id TEXT,state TEXT);
+             CREATE TABLE metadata_edit_overrides(job_id TEXT,batch_id TEXT,state TEXT);
+             CREATE TABLE jobs(id TEXT PRIMARY KEY,state TEXT);
+             CREATE TABLE tag_writes(job_id TEXT,state TEXT);
+             INSERT INTO curation_publications VALUES('publication','waiting_incoming','child');
+             INSERT INTO jobs VALUES('job','completed');",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO metadata_edit_overrides VALUES('job','child',?1)",
+            [override_state],
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn a_publication_whose_incoming_edit_was_written_is_not_discardable_whatever_became_of_it() {
+        for written in ["committed", "undone", "expired"] {
+            assert!(
+                !discardable(&conn(written), Some("publication")).unwrap(),
+                "{written}: the tags were written"
+            );
+        }
+        // An edit that was never written leaves nothing to keep.
+        for waiting in ["queued", "claimed", "discarded"] {
+            assert!(
+                discardable(&conn(waiting), Some("publication")).unwrap(),
+                "{waiting}"
+            );
+        }
+    }
 }

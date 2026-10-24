@@ -4,16 +4,17 @@
 
 !!! abstract "What this means for you"
     - **The library holds locations, not audio.** Moving or renaming a music file outside CueRithm can leave its local binding unresolved. **Missing & broken** reports it; reviewed **Relocate** reconnects it while keeping its track identity. See [Find missing, moved or broken files](../files/library/find-missing-files.md).
-    - **Originals are kept, without a limit.** Every file CueRithm rewrites leaves its original bytes in the data folder. General retention controls are unfinished, so these backups grow until you remove them. See [Where CueRithm keeps your data](../files/library/where-data-lives.md).
+    - **The library holds no audio, and Undo is bounded.** From CueRithm 0.1.19 or later CueRithm holds a copy of a file only while it writes it. Undo keeps recorded tag values, not copies, and only for your 10 newest operations. See [Where CueRithm keeps your data](../files/library/where-data-lives.md#space).
     - **Back the library up with Library backup**, and your music with your usual backup. A library backup does not contain music. See [Back up your library](../files/library/back-up-library.md).
-    - **The schema is version 30.** An older CueRithm refuses a newer library, and there is no downgrade.
+    - **The schema is version 31.** An older CueRithm refuses a newer library, and there is no downgrade. Opening an older library upgrades it in place; a snapshot made by an older release of the same installation cannot be restored into a newer library.
 
 ## What kind of database it is { #the-engine }
 
 - SQLite, bundled with the app, in a file named `library.sqlite` in the application data folder.
-- **WAL** journal mode, synchronous FULL, foreign keys on and a 5-second busy timeout.
+- **WAL** journal mode, synchronous FULL, foreign keys on and a 5-second busy timeout. The log is limited to 16 MiB after a checkpoint, checkpointed every 1000 pages, and emptied when the library opens, after a large import and on a clean exit.
+- Incremental **auto-vacuum**: pages freed by deleted rows go back to the file system in bounded steps. A library created before version 31 is converted once, by a single `VACUUM`, when it holds up to 512 MiB and the disk has room for three times its size; a bigger one keeps working as before.
 - An application ID marks the file as a CueRithm library. A non-empty SQLite file without it is rejected.
-- The schema version (`user_version`) is currently 30. Migrations are embedded SQL files applied in order, each in an immediate transaction. A newer schema is refused with "Library schema is newer than this application". Migrations preserve existing tracks, jobs and cue ownership.
+- The schema version (`user_version`) is currently 31. Migrations are embedded SQL files applied in order, each in an immediate transaction. A newer schema is refused with "Library schema is newer than this application". Migrations preserve existing tracks, jobs and cue ownership.
 
 ## Where things live { #where-things-live }
 
@@ -23,7 +24,7 @@
 | Active-library pointer and activation journals | `active-library.json` and manager-owned files in the data folder |
 | Embedded key model, installed once and verified | `analysis-components/` |
 | Decode scratch folders (cleaned at start), extracted cover art, waveform caches | `cache/media/`, `cache/artwork/`, `cache/waveforms/` |
-| Original-file backups from tag writes, cleanup and manual edits | `tagging/`, `cleanup/`, `metadata-edits/` |
+| Copies of files while a write is under way (empty otherwise), and the artwork a manual edit replaced | `tagging/`, `cleanup/`, `metadata-edits/` |
 | Recovery records for file organisation, maintenance and sync | `organization-references/`, `maintenance/`, `sync/` |
 | Library backups and scheduled restore requests | `library-backups/` |
 | Your music | Wherever you keep it. Portable source locators and optional local bindings refer to it |
@@ -44,11 +45,11 @@ The data folder's location on each system, and which folders are safe to leave a
 | Tag-write journal | `tag_writes`, `tag_write_files` | What was written, and how to roll it back |
 | Preferences | `library_preferences` | Time zone, key compatibility mode and the automatic smart playlist options, in their own revision-checked record |
 | Playlists, cleanup, Curate, maintenance, organisation | Many tables | Members and edits, cleanup plans and batches, custom tags and categories, file plans |
-| DJ software | `native_records`, `native_track_links`, `sync_links` | Stored copies of the records read from a DJ library, kept as the baseline for conflict detection |
+| DJ software | `native_records`, `native_track_links`, `sync_links` | What was read from a DJ library, kept as the baseline for conflict detection: a hash of every record, and the content only of playlists, tags and linked tracks |
 
 A global `revision` counter increases on every change, which is how the interface knows to refresh. Each job pins the settings revision it was queued under, so changing Settings never alters a job already in flight.
 
-The DJ-software copies can be large. With a big rekordbox collection they can make the database several times bigger than the track table alone. <!-- Measured once on a maintainer library: the DJ-software copies were about half of a 253 MB database; not a published benchmark -->
+Earlier versions kept a full copy of every record, and with a big rekordbox collection that made the database several times bigger than the track table alone. Version 30 keeps a hash of each record, which is all that a later read compares, and converts what was stored. <!-- Measured once on a maintainer library: the DJ-software copies were about half of a 253 MB database, with 129 MB more in its log; after the upgrade the files together were about 31 MB; not a published benchmark -->
 
 ## Paths across systems { #paths-across-systems }
 
@@ -63,7 +64,8 @@ CueRithm takes an exclusive lock on `library.sqlite.lock`. A second copy gets "T
 ## Recovery at startup { #recovery-at-startup }
 
 - Jobs that were *running* go back to *queued*.
-- A tag write, cleanup, duplicate merge, unused-file removal, file organisation or metadata edit that was interrupted before it finished is rolled back or completed from its journal.
+- A tag write, cleanup, duplicate merge, unused-file removal, file organisation or metadata edit that was interrupted before it finished is rolled back or completed from its journal. Files of an unused-file removal that were on their way to the Trash are sent there once CueRithm has opened.
+- Leftovers of earlier versions are cleaned in bounded steps: the file copies they kept for finished writes, saved scans beyond the newest three of each kind, and caches beyond their limits.
 - Leftover decode scratch folders are deleted.
 
 ## Where your settings are stored { #settings-storage }
@@ -72,7 +74,20 @@ Everything in the preparation settings (watch folders, cue settings, tagging, cl
 
 ## Backups and retention { #backups }
 
-CueRithm keeps the original bytes of every file it changes, under `tagging/`, `cleanup/` and `metadata-edits/`. A write that changes nothing keeps no backup. The total is visible as **Recovery backups** on **Settings → Automatic tagging**. There is no retention control yet; the only explicit disposal is for the backups of unused-file removals, in [Undo a merge or restore removed files](../files/library/undo-maintenance.md).
+CueRithm holds a copy of a file only while it writes it, and deletes the copy when the write has settled. It does not keep copies of your audio for Undo: a manual cleanup or manual edit records the tag values it replaced, and Undo writes them back. The total of the copies that exist is visible as **Recovery backups** on **Settings → Automatic tagging**, and is normally zero.
+
+Everything that exists for Undo or recovery has a bound:
+
+| What | Kept |
+|---|---|
+| Undo of a merge or a removal of library records | Your 10 newest, counted together |
+| Undo of a manual cleanup and of a manual tag edit | Your 10 newest each |
+| Restoring a sync to DJ software | The 10 newest per DJ program; an older sync stays in the history without its backup |
+| Saved scans, reviews and previews | The 3 newest of each kind, never one a kept plan still needs |
+| Removed unused files | Not kept: they are in the Trash |
+| Waveform cache | At most 256 MiB, least recently used first |
+
+Removing a track record purges what was built from it: fingerprints, cached analysis, review artwork, waveforms and the saved scans that listed it. Only the cover art stays, until the removal can no longer be undone. See [Undo a merge or put back removed files](../files/library/undo-maintenance.md).
 
 [Portable library backup](../files/library/back-up-library.md#create) writes logical `.cuerithm` records from a coherent SQLite snapshot, including committed WAL data. It excludes music, caches, runnable jobs, executable Undo journals, credentials and machine bindings.
 
@@ -87,7 +102,7 @@ The separate [same-installation snapshot](../files/library/back-up-library.md#in
 | **Maintenance → Missing & broken** | Tracks whose stored path no longer points at a readable file; from here you can remove their records or reconnect them |
 | **Library backup** (sidebar) | Create a backup, and restore one |
 | **Settings → Library preferences** | Time zone and key compatibility mode, saved in the library |
-| **Settings → Automatic tagging → Recovery backups** | Size and file count of the retained originals |
+| **Settings → Automatic tagging → Recovery backups** | Size and file count of the copies of files being written right now |
 
 ## Related
 
@@ -96,4 +111,4 @@ The separate [same-installation snapshot](../files/library/back-up-library.md#in
 - [I moved or renamed my files](../help/troubleshooting/files-moved.md)
 - [How are tags written safely?](tag-writing.md)
 
-<!-- verified: crates/cuerithm-library/src/store.rs; migrations/029_portable_identity.sql; portable.rs; musical.rs; generations.rs; backup/spool.rs; library_backup.rs; apps/desktop/src-tauri/src/host.rs; portable_commands.rs; tests/library_generations.rs; tests/portable_backup.rs. Existing upstream analysis/recovery descriptions retained; portable bindings, generation storage and schema updated from current source. -->
+<!-- verified: crates/cuerithm-library/src/store.rs; lean.rs (WAL bounds, auto-vacuum, one-time conversion limits); migrations/030_lean_native_records.sql; native_sync.rs (hash for every record); cache_limits.rs; legacy_originals.rs; maintenance/saved.rs; undo_window.rs; rekordbox_sync_service/retention.rs; dj_sync_service.rs; portable.rs; generations.rs; backup/spool.rs; library_backup.rs; apps/desktop/src-tauri/src/host.rs; docs/development/lean-library-audit.md. Existing upstream recovery descriptions retained. -->

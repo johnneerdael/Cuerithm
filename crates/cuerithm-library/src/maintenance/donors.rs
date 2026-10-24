@@ -51,8 +51,17 @@ struct StagedImport {
     target: String,
     donor: String,
     record: cuerithm_maintenance::ImportRecord,
+    /// The keeper's tags as they were before the donor's values were written.
+    previous: TransferSnapshot,
     native: TransferSnapshot,
     staged: StagedTagWrite,
+}
+/// The tag values a donor copy replaced and wrote. Undo writes `before` back into the keeper's
+/// file, so no copy of the original audio has to be kept.
+#[derive(Clone, Serialize, Deserialize)]
+struct TransferRecord {
+    before: TransferSnapshot,
+    after: TransferSnapshot,
 }
 #[derive(Serialize, Deserialize)]
 struct Payload {
@@ -85,8 +94,22 @@ struct Payload {
     interrupted_deletions: Vec<String>,
     #[serde(default)]
     deletions_acknowledged: bool,
+    /// Per keeper track: the tag values before and after a donor copy. An operation that records
+    /// them is undone by writing the previous values back; one from an earlier version has none
+    /// and is undone from its retained original.
+    #[serde(default)]
+    transfers: BTreeMap<String, TransferRecord>,
 }
 impl Payload {
+    /// What a donor copy recorded for the file at `path`, with the track it belongs to.
+    fn transfer_for(&self, path: &std::path::Path) -> Option<(&String, &TransferRecord)> {
+        self.transfers.iter().find(|(id, _)| {
+            self.before
+                .get(*id)
+                .and_then(|image| image.row.path().ok())
+                .is_some_and(|p| p == path)
+        })
+    }
     /// Drop what only Undo of a removal needs, keeping the summary in `result`. Returns the
     /// covers that were being kept for it.
     fn forget_removed(&mut self) -> Vec<String> {
@@ -150,6 +173,12 @@ struct Write {
     payload: Payload,
     files: Vec<(Artifact, PathBuf)>,
 }
+impl Write {
+    /// Undo of this operation writes recorded tag values back, so its original is not kept.
+    fn records_values(&self) -> bool {
+        self.payload.kind == "undo" || !self.payload.transfers.is_empty()
+    }
+}
 fn load(lib: &Library, id: &str) -> Result<Write> {
     let conn = lib.conn()?;
     let (state, text): (String, String) = conn.query_row(
@@ -209,10 +238,12 @@ fn load(lib: &Library, id: &str) -> Result<Write> {
             .as_ref()
             .map(|p| super::files::resolved_prefix(p))
             .transpose()?;
+        // The backup of a settled operation that records its tag values was deleted on purpose,
+        // and its private folder with it.
         ensure!(
-            workspace.canonicalize()?.starts_with(&root)
+            super::files::resolved_prefix(workspace)?.starts_with(&root)
                 && staged.starts_with(workspace)
-                && backup.as_ref().is_some_and(|p| p.starts_with(workspace)),
+                && backup.as_ref().is_none_or(|p| p.starts_with(workspace)),
             "Recovery assets leave application data"
         );
         ensure!(
@@ -343,6 +374,7 @@ fn finish(
     lib: &Library,
     id: &str,
     files: &[(Artifact, PathBuf)],
+    retire_backup: bool,
     error: Option<&anyhow::Error>,
 ) -> Result<()> {
     let artifacts = files.iter().map(|(f, _)| f.clone()).collect::<Vec<_>>();
@@ -372,9 +404,16 @@ fn finish(
             return Ok(());
         }
     }
-    match cleanup_temporaries(&artifacts, lib.data_dir()) {
+    match cleanup_temporaries(&artifacts, lib.data_dir(), retire_backup) {
         Ok(()) => {
-            lib.conn()?.execute(
+            let conn = lib.conn()?;
+            if retire_backup {
+                conn.execute(
+                    "UPDATE maintenance_write_files SET backup=NULL WHERE write_id=?1",
+                    [id],
+                )?;
+            }
+            conn.execute(
                 "UPDATE maintenance_writes SET cleanup_complete=1 WHERE id=?1",
                 [id],
             )?;
@@ -563,7 +602,7 @@ impl DuplicateMergeService {
             };
             let write = TagWritePlan::build(input, &outcome, &cfg, &AnalysisTags::default())?
                 .with_transfer(TransferPatch {
-                    before: target_native,
+                    before: target_native.clone(),
                     after: native.clone(),
                 })?
                 .stage_prepared_cancellable(&self.runtime, &audio, &cache, cancel)?;
@@ -576,6 +615,7 @@ impl DuplicateMergeService {
                 target: copy.to.clone(),
                 donor: copy.from.clone(),
                 record: imported,
+                previous: target_native,
                 native,
                 staged: write,
             });
@@ -644,6 +684,18 @@ impl DuplicateMergeService {
             artwork_hashes: vec![],
             interrupted_deletions: vec![],
             deletions_acknowledged: false,
+            transfers: staged
+                .iter()
+                .map(|s| {
+                    (
+                        s.target.clone(),
+                        TransferRecord {
+                            before: s.previous.clone(),
+                            after: s.native.clone(),
+                        },
+                    )
+                })
+                .collect(),
             trash_intent: doomed
                 .iter()
                 .map(|f| {
@@ -655,6 +707,8 @@ impl DuplicateMergeService {
                 .collect::<Result<_>>()?,
             undo_expired: false,
         };
+        // A donor copy records the tag values it replaced, so Undo does not need the original.
+        let retire_backups = !payload.transfers.is_empty();
         reserve(
             &self.lib,
             &id_op,
@@ -864,9 +918,7 @@ impl DuplicateMergeService {
                 "UPDATE maintenance_scans SET payload_json=?1 WHERE id=?2",
                 params![serde_json::to_string(&current)?, id],
             )?;
-            if payload.removed.is_some() {
-                freed = undo_window::enforce(&tx)?;
-            }
+            freed = undo_window::enforce(&tx)?;
             tx.commit()?;
             Ok(())
         })();
@@ -881,7 +933,7 @@ impl DuplicateMergeService {
                 )
             }
         });
-        finish(&self.lib, &id_op, &files, reported.as_ref())?;
+        finish(&self.lib, &id_op, &files, retire_backups, reported.as_ref())?;
         outcome?;
         // Waveforms of content that is gone; rebuilt on demand if it returns. The covers of the
         // removed tracks stay until their saved records are dropped; those of removals that
@@ -894,6 +946,7 @@ impl DuplicateMergeService {
             );
         }
         purge::free_covers(&self.lib, &freed)?;
+        self.lib.tidy_after_bulk_change();
         Ok(payload.result)
     }
     /// Undo of a removal only goes ahead when the removed tracks' identities and locations are
@@ -1062,6 +1115,50 @@ impl DuplicateMergeService {
             Err(reason) => Err((DuplicateSkipReason::TrashFailed, reason)),
         }
     }
+    /// Stages the keeper's file with the tag values from before the donor copy, written into the
+    /// file as it is now through the same checked transfer as the copy itself.
+    fn stage_value_restore(
+        &self,
+        target: &std::path::Path,
+        expected_hash: &str,
+        record: &TransferRecord,
+        cancel: &CancellationToken,
+    ) -> Result<StagedTagWrite> {
+        let cache = self.lib.data_dir().join("maintenance/staging");
+        let audio = self.runtime.decode_cancellable(target, &cache, cancel)?;
+        ensure!(
+            audio.source_sha256 == expected_hash,
+            "Source changed; Undo needs review"
+        );
+        let current = cuerithm_autotag::read_transfer_metadata(&audio.snapshot_path, &audio.info)?;
+        ensure!(current == record.after, "Later tag edits prevent Undo");
+        let mut cfg = AutotagConfig::default();
+        cfg.options.tags.clear();
+        cfg.write_energy = false;
+        let input = TagInput {
+            path: target.to_path_buf(),
+            source_sha256: audio.source_sha256.clone(),
+            media: audio.info.clone(),
+            duration_seconds: audio.clock.duration_seconds(),
+        };
+        let outcome = TagMatchOutcome {
+            status: MatchStatus::NoMatch,
+            matches: vec![],
+            attempted: vec![],
+            warnings: vec![],
+        };
+        let write = TagWritePlan::build(input, &outcome, &cfg, &AnalysisTags::default())?
+            .with_transfer(TransferPatch {
+                before: record.after.clone(),
+                after: record.before.clone(),
+            })?
+            .stage_prepared_cancellable(&self.runtime, &audio, &cache, cancel)?;
+        std::fs::set_permissions(
+            &write.backup_path,
+            std::fs::metadata(&audio.source_path)?.permissions(),
+        )?;
+        Ok(write)
+    }
     pub fn undo(&self, id: &str, cancel: &CancellationToken) -> Result<DuplicateMergeResult> {
         cancel.check()?;
         let found: bool = self.lib.conn()?.query_row(
@@ -1122,6 +1219,7 @@ impl DuplicateMergeService {
         })?;
         let undo_id = uuid::Uuid::new_v4().to_string();
         let mut files = vec![];
+        let mut value_restored: Vec<(String, StagedTagWrite)> = vec![];
         for (i, (file, _)) in original.files.iter().enumerate() {
             ensure!(
                 current_hash(&file.target)?.as_deref() == Some(file.after.as_str()),
@@ -1135,6 +1233,36 @@ impl DuplicateMergeService {
                 .before
                 .as_deref()
                 .context("Missing original identity")?;
+            // A donor copy that recorded the keeper's previous tag values is undone by writing
+            // them back into the file as it is now; only an operation from an earlier version
+            // is undone from its retained original.
+            if let Some((track_id, record)) = original.payload.transfer_for(&file.target) {
+                let staged = self.stage_value_restore(&file.target, &file.after, record, cancel)?;
+                let publish = file
+                    .target
+                    .parent()
+                    .unwrap()
+                    .join(format!(".cuerithm-duplicate-{undo_id}-{i}.tmp"));
+                let displaced = if cfg!(windows) {
+                    publish.with_extension("before.tmp")
+                } else {
+                    publish.clone()
+                };
+                files.push((
+                    Artifact {
+                        target: file.target.clone(),
+                        staged: staged.path.clone(),
+                        backup: Some(staged.backup_path.clone()),
+                        before: Some(file.after.clone()),
+                        after: staged.source_after_sha256.clone(),
+                        publish,
+                        displaced,
+                    },
+                    staged.workspace().canonicalize()?,
+                ));
+                value_restored.push((track_id.clone(), staged));
+                continue;
+            }
             let old = file.backup.as_ref().context("Missing original backup")?;
             ensure!(
                 current_hash(old)?.as_deref() == Some(before),
@@ -1196,6 +1324,7 @@ impl DuplicateMergeService {
             artwork_hashes: vec![],
             interrupted_deletions: vec![],
             deletions_acknowledged: false,
+            transfers: BTreeMap::new(),
         };
         let _gate = self
             .lib
@@ -1205,6 +1334,9 @@ impl DuplicateMergeService {
             .map_err(|_| anyhow::anyhow!("Publication gate interrupted"))?;
         reserve(&self.lib, &undo_id, &payload, &files, &stamp, cancel)?;
         let _kept = work.keep();
+        for (_, staged) in &mut value_restored {
+            staged.retain_for_journal();
+        }
         let outcome = (|| -> Result<()> {
             let mut conn = self.lib.conn()?;
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -1255,6 +1387,18 @@ impl DuplicateMergeService {
                     donor_state::restore(&tx, image)?;
                 }
             }
+            // The file Undo wrote has the old tags but not the old bytes: the library knows the
+            // file it really has.
+            for (track_id, staged) in &value_restored {
+                tx.execute(
+                    "UPDATE tracks SET source_hash=?1,metadata_json=?2 WHERE id=?3",
+                    params![
+                        staged.source_after_sha256,
+                        serde_json::to_string(&staged.metadata)?,
+                        track_id
+                    ],
+                )?;
+            }
             merge::write_members(&tx, &payload.playlists, true)?;
             payload.result.stamp = merge::advance(&tx)?;
             payload.epochs = donor_state::epochs(&tx, &tracks, &playlists)?;
@@ -1273,7 +1417,7 @@ impl DuplicateMergeService {
             tx.commit()?;
             Ok(())
         })();
-        finish(&self.lib, &undo_id, &files, outcome.as_ref().err())?;
+        finish(&self.lib, &undo_id, &files, true, outcome.as_ref().err())?;
         outcome?;
         Ok(payload.result)
     }
@@ -1311,10 +1455,10 @@ impl Library {
         if matches!(write.state.as_str(), "prepared" | "conflict") {
             let error = interruption(&write, "Explicit duplicate recovery retry");
             let gone = gone_files(&write);
-            finish(self, id, &write.files, Some(&error))?;
+            finish(self, id, &write.files, write.records_values(), Some(&error))?;
             self.note_interrupted_deletions(id, &gone)?;
         } else {
-            finish(self, id, &write.files, None)?;
+            finish(self, id, &write.files, write.records_values(), None)?;
             // A rolled-back operation that had already moved files is shown until the DJ has
             // seen it; selecting it in History acknowledges it, and it does not come back.
             if write.state == "rolled_back" && !write.payload.interrupted_deletions.is_empty() {
@@ -1355,7 +1499,13 @@ impl Library {
             let write = load(self, &id)?;
             let error = interruption(&write, "Interrupted duplicate operation rolled back");
             let gone = gone_files(&write);
-            finish(self, &write.id, &write.files, Some(&error))?;
+            finish(
+                self,
+                &write.id,
+                &write.files,
+                write.records_values(),
+                Some(&error),
+            )?;
             self.note_interrupted_deletions(&write.id, &gone)?;
         }
         let ids = {
@@ -1366,7 +1516,7 @@ impl Library {
         };
         for id in ids {
             let write = load(self, &id)?;
-            finish(self, &id, &write.files, None)?;
+            finish(self, &id, &write.files, write.records_values(), None)?;
         }
         Ok(())
     }
@@ -1508,7 +1658,16 @@ mod tests {
     #[test]
     fn interrupted_undo_recovers_to_the_committed_after_state_and_can_be_retried() {
         let (dir, lib, runtime, preview, path, target) = fixture();
-        let original = cuerithm_media::file_sha256(&path).unwrap();
+        // Undo writes the recorded tags back; the audio and the tags are what must return.
+        let content = |path: &std::path::Path| {
+            let audio = runtime
+                .decode_cancellable(path, dir.path(), &CancellationToken::default())
+                .unwrap();
+            let tags = cuerithm_autotag::read_transfer_metadata(&audio.snapshot_path, &audio.info)
+                .unwrap();
+            (audio.pcm_sha256().unwrap(), tags)
+        };
+        let original = content(&path);
         let mut service = DuplicateMergeService::new(lib.clone(), runtime.clone());
         let applied = service
             .apply(&preview.id, &CancellationToken::default())
@@ -1526,10 +1685,10 @@ mod tests {
         let lib = Library::open(&dir.path().join("app/library.sqlite")).unwrap();
         assert_eq!(cuerithm_media::file_sha256(&path).unwrap(), after);
         assert_eq!(lib.track(&target).unwrap().title, "Donor");
-        DuplicateMergeService::new(lib, runtime)
+        DuplicateMergeService::new(lib, runtime.clone())
             .undo(&applied.id, &CancellationToken::default())
             .unwrap();
-        assert_eq!(cuerithm_media::file_sha256(&path).unwrap(), original);
+        assert_eq!(content(&path), original);
     }
     struct MustNotRun;
     impl FileTrash for MustNotRun {

@@ -36,8 +36,13 @@ pub(super) const DERIVED_TABLES: [&str; 5] = [
 pub(super) const CALLER_TABLES: [&str; 1] = ["playlist_members"];
 /// Saved reports that list every library track with its path and fingerprint. A removal
 /// makes all of them stale, so they are deleted rather than kept with the removed music
-/// in them.
-const STALE_REPORTS: [&str; 3] = ["duplicates", "duplicate_review", "duplicate_merge_plan"];
+/// in them. The unused-file scan is one: it names every path the library refers to.
+const STALE_REPORTS: [&str; 4] = [
+    "duplicates",
+    "duplicate_review",
+    "duplicate_merge_plan",
+    "unused",
+];
 /// Saved reports and previews that only mention the tracks they were made for.
 const NAMING_REPORTS: [&str; 3] = ["broken", PREVIEW_REMOVAL, PREVIEW_RELINK];
 
@@ -141,15 +146,10 @@ pub(super) fn rows(conn: &Connection, derived: &Derived, ids: &[String]) -> Resu
     }
     let orphaned: BTreeSet<String> = derived.hashes.difference(&used).cloned().collect();
     let gone: Vec<String> = orphaned.iter().cloned().collect();
-    let generations: Vec<String> = derived.generations.iter().cloned().collect();
     for (sql, values) in [
         (
             "DELETE FROM preparation_analysis WHERE source_hash IN",
             &gone,
-        ),
-        (
-            "DELETE FROM preparation_review_artwork WHERE generation IN",
-            &generations,
         ),
         (
             "DELETE FROM maintenance_track_epochs WHERE id IN",
@@ -163,6 +163,12 @@ pub(super) fn rows(conn: &Connection, derived: &Derived, ids: &[String]) -> Resu
             )?;
         }
     }
+    // Review artwork of the removed tracks' catalog generations, and of every older generation
+    // a re-query left behind: nothing reads a generation that no track holds.
+    conn.execute(
+        "DELETE FROM preparation_review_artwork WHERE generation NOT IN (SELECT generation FROM preparation_match_generations)",
+        [],
+    )?;
     saved_reports(conn, ids)?;
     Ok(Orphans {
         hashes: orphaned,

@@ -92,7 +92,7 @@ A new track passes through these steps in [Incoming](../files/follow-incoming.md
 | Copy a worked example for a real problem | [Tag and clean-up recipes](recipes/index.md) |
 
 !!! warning "Tag changes are written into your files"
-    Every write is checked so the audio stays identical, and CueRithm keeps the original file as a recovery backup. Automatic tagging has no Undo button, though, and [library backup](../files/library/back-up-library.md) does not include your music. Practise on copies, and keep your own copy of the music before a large run.
+    Every write is checked so the audio stays identical, and CueRithm keeps the original file while the write is under way. Automatic tagging has no Undo button, though, and [library backup](../files/library/back-up-library.md) does not include your music. Practise on copies, and keep your own copy of the music before a large run.
 
 ## Not what you wanted? { #elsewhere }
 

@@ -112,6 +112,19 @@ that depends on the version carries one short note, never a warning that the fea
   `files/library/find-missing-files.md`, `files/library/undo-maintenance.md`,
   `files/library/index.md` and `files/archive.md`.
 
+- **Added by the release after that** (0.1.19, the lean library work) is described as current
+  behaviour with the note "CueRithm 0.1.19 or later", written exactly like that and once per page:
+  removed unused files go to the Trash and CueRithm keeps no copy (no Restore files, no backup
+  disposal); Undo of a cleanup, a tag edit and a donor tag copy writes back recorded tag values
+  instead of copying an original file back, and a copy of a file is held only while its write is
+  under way; Undo covers the 10 newest operations of each kind, with every merge sharing the
+  limit of 10 removals; restoring a sync keeps its backup for the newest 10 syncs of each DJ
+  program; the library keeps its log and free space small, and DJ-library records as hashes. The
+  affected pages are `files/library/clean-up-unused-files.md`, `undo-maintenance.md`,
+  `where-data-lives.md`, `find-duplicates.md`, `find-missing-files.md`, `index.md`,
+  `how-it-works/library.md`, `how-it-works/tag-writing.md`, `tagging/tag-history.md`,
+  `tagging/undo-cleanup.md`, `sync/preview-apply-restore.md` and `help/not-available-yet.md`.
+
 `get-started/whats-new.md` has a section for every release; its release notes are the source for
 what shipped. When 0.1.17 ships: confirm the number against `gh release view`, add its section to
 `whats-new.md`, and keep "CueRithm 0.1.17 or later" as the minimum version (move the note's

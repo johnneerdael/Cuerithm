@@ -123,9 +123,12 @@ search-page count and version matching controls.
 If a catalog returns no match, either retain existing catalog metadata and finish
 with configured measured tags, or leave the track in Incoming for attention.
 A no-match outcome is retained in preparation provenance. Failed writes retain
-previous cues and use journaled backups/recovery. Original backups are retained
-in application data; Settings shows their count and size. Redundant staged
-outputs are cleaned automatically, and no-op writes retain no duplicate audio.
+previous cues and use journaled backups/recovery. A copy of the original audio
+is kept in application data only while a write is under way: once it has settled
+(committed or rolled back) the copy is removed, and a library from an earlier
+version loses the copies it kept, a bounded number per start. Settings shows what
+is still held. Automatic tagging has no Undo. Redundant staged outputs are cleaned
+automatically, and no-op writes retain no duplicate audio.
 Unchanged provider retries reuse completed full analysis. If a file changes during lookup,
 its new bytes are analysed before publication; an older attempt cannot overwrite
 a newer job.

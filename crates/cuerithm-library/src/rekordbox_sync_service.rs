@@ -24,8 +24,10 @@ mod types;
 pub use types::*;
 mod assets;
 mod ledger;
+pub(crate) use ledger::upgrade_operations as upgrade_operation_ledgers;
 mod planning;
 mod publication;
+mod retention;
 #[cfg(test)]
 mod tests;
 
@@ -146,6 +148,11 @@ fn load(library: &Library, id: &str) -> Result<Operation> {
         [id],
         |r| r.get(0),
     )?;
+    ensure!(
+        !retention::is_expired(&value),
+        "This sync is older than the {} kept for restore, so its backup was removed",
+        retention::RESTORE_LIMIT
+    );
     let op: Operation = serde_json::from_str(&value)?;
     ensure!(
         op.id == id && op.version == 1,
@@ -773,6 +780,22 @@ impl Library {
         Ok(())
     }
     pub fn history_rekordbox_sync(&self) -> Result<Vec<RekordboxSyncHistoryEntry>> {
+        /// The part of a journal the history shows; a sync that gave up its backup keeps only this.
+        #[derive(Deserialize)]
+        struct Row {
+            id: String,
+            target: RowTarget,
+            status: String,
+            created: i64,
+            updated: i64,
+            outcome: Option<RekordboxSyncOutcome>,
+            #[serde(default)]
+            restore_expired: bool,
+        }
+        #[derive(Deserialize)]
+        struct RowTarget {
+            id: String,
+        }
         let connection = self.conn()?;
         let mut statement = connection.prepare(
             "SELECT journal_json FROM rekordbox_sync_operations ORDER BY created DESC,id DESC",
@@ -782,14 +805,16 @@ impl Library {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.into_iter()
             .map(|s| {
-                let op: Operation = serde_json::from_str(&s)?;
+                let row: Row = serde_json::from_str(&s)?;
                 Ok(RekordboxSyncHistoryEntry {
-                    id: op.id,
-                    target_id: op.target.id,
-                    status: op.status,
-                    created: op.created,
-                    updated: op.updated,
-                    outcome: op.outcome,
+                    restore_available: !row.restore_expired
+                        && matches!(row.status.as_str(), "applied" | "native_published"),
+                    id: row.id,
+                    target_id: row.target.id,
+                    status: row.status,
+                    created: row.created,
+                    updated: row.updated,
+                    outcome: row.outcome,
                 })
             })
             .collect()

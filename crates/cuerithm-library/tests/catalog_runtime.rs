@@ -9,7 +9,7 @@ fn catalog_runtime_schema_is_explicit_and_survives_reopen() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
             .unwrap(),
-        30,
+        31,
         "New provider and typed-evidence settings must not be silently read by an older binary"
     );
     for table in [

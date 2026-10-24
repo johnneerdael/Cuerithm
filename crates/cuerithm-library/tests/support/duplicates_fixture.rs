@@ -127,6 +127,41 @@ impl Fixture {
         // handed out again after a delete and mean nothing, so Undo does not restore them.
         ["SELECT json_group_array(json_array(id,hex(path),title,artist,archived,source_hash,state,analysis_json,metadata_json,current_job)) FROM (SELECT * FROM tracks ORDER BY id)","SELECT json_group_array(json_array(id,track_id,state,stage,attempts,settings_revision)) FROM (SELECT * FROM jobs ORDER BY id)","SELECT json_group_array(json_array(id,track_id,job_id,json,created)) FROM (SELECT * FROM cue_revisions ORDER BY id)","SELECT json_group_array(json_array(playlist_id,track_id,position)) FROM (SELECT * FROM playlist_members ORDER BY playlist_id,position)","SELECT json_group_array(json_array(track_id,tag_id)) FROM (SELECT * FROM track_custom_tags ORDER BY track_id,tag_id)","SELECT json_group_array(json_array(track_id,target,external_id,baseline_json)) FROM (SELECT * FROM sync_links ORDER BY track_id,target)","SELECT json_group_array(json_array(target_id,content_id,local_track_id,status)) FROM (SELECT * FROM native_track_links ORDER BY target_id,content_id)"].iter().map(|sql|conn.query_row(sql,[],|r|r.get(0)).unwrap()).collect()
     }
+    /// Like [`content`](Self::content) without the columns that describe the bytes of a file: a
+    /// donor copy's Undo writes the previous tag values back, so the file it leaves has the old
+    /// tags but not the old bytes.
+    pub fn content_ignoring_file_identity(&self) -> Vec<String> {
+        let conn = rusqlite::Connection::open(&self.db).unwrap();
+        ["SELECT json_group_array(json_array(id,hex(path),title,artist,archived,state,analysis_json,current_job)) FROM (SELECT * FROM tracks ORDER BY id)","SELECT json_group_array(json_array(id,track_id,state,stage,attempts,settings_revision)) FROM (SELECT * FROM jobs ORDER BY id)","SELECT json_group_array(json_array(id,track_id,job_id,json,created)) FROM (SELECT * FROM cue_revisions ORDER BY id)","SELECT json_group_array(json_array(playlist_id,track_id,position)) FROM (SELECT * FROM playlist_members ORDER BY playlist_id,position)","SELECT json_group_array(json_array(track_id,tag_id)) FROM (SELECT * FROM track_custom_tags ORDER BY track_id,tag_id)","SELECT json_group_array(json_array(track_id,target,external_id,baseline_json)) FROM (SELECT * FROM sync_links ORDER BY track_id,target)","SELECT json_group_array(json_array(target_id,content_id,local_track_id,status)) FROM (SELECT * FROM native_track_links ORDER BY target_id,content_id)"].iter().map(|sql|conn.query_row(sql,[],|r|r.get(0)).unwrap()).collect()
+    }
+    /// Every tag one file holds and its decoded audio.
+    #[cfg(feature = "autotag")]
+    pub fn file_state(&self, index: usize) -> (cuerithm_autotag::TransferSnapshot, String) {
+        let path = &self.paths[index];
+        let tags =
+            cuerithm_autotag::read_transfer_metadata(path, &self.runtime.probe(path).unwrap())
+                .unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let pcm = self
+            .runtime
+            .decode(path, cache.path())
+            .unwrap()
+            .pcm_sha256()
+            .unwrap();
+        (tags, pcm)
+    }
+    /// The library describes the file the track really has.
+    pub fn assert_library_knows_file(&self, index: usize) {
+        let recorded: String = rusqlite::Connection::open(&self.db)
+            .unwrap()
+            .query_row(
+                "SELECT source_hash FROM tracks WHERE id=?1",
+                [&self.ids[index]],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(recorded, hash(&self.paths[index]));
+    }
     pub fn scan(&self, tolerance: cuerithm_library::DuplicateTolerance) -> DuplicateScanReport {
         self.lib
             .scan_duplicates(

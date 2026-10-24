@@ -40,11 +40,9 @@ export interface DuplicateMergeHistory {result:DuplicateMergeResult;created:numb
 
 export interface DuplicateRecovery {id:string;kind:string;state:string;created:number;error:string|null;files_moved?:boolean}
 
-export interface UnusedRemovalFile extends UnusedFile {role:"selected"|"sibling"|"folder_metadata"}
+export interface UnusedRemovalFile extends UnusedFile {role:"selected"|"sibling"|"folder_metadata";permanent?:boolean}
+export type UnusedRemovalDisposal="trashed"|"deleted"|"left_in_place"|"gone";
+export interface UnusedRemovalOutcome {id:string;display_path:string;disposal:UnusedRemovalDisposal;reason:string|null}
 export interface UnusedRemovalPreview {directories:string[];id:string;scan_id:string;stamp:MaintenanceStamp;files:UnusedRemovalFile[];size_bytes:number}
-export interface UnusedRemovalResult {directories:string[];id:string;preview_id:string;stamp:MaintenanceStamp;files:UnusedRemovalFile[];size_bytes:number;restored:boolean;undo_of:string|null}
-export interface UnusedRemovalHistory {restore_available:boolean;result:UnusedRemovalResult;state:string;error:string|null;undone_by:string|null;cleanup_pending:boolean}
-
-export interface UnusedBackupFile {operation_id:string;file_id:string;display_source_path:string;size_bytes:number;source_sha256:string}
-export interface UnusedBackupPreview {id:string;operation_ids:string[];files:UnusedBackupFile[];size_bytes:number;restores_lost:string[]}
-export interface UnusedBackupDisposal {id:string;preview_id:string;operation_ids:string[];file_count:number;size_bytes:number;state:string;cleanup_pending:boolean;error:string|null}
+export interface UnusedRemovalResult {directories:string[];id:string;preview_id:string;stamp:MaintenanceStamp;files:UnusedRemovalFile[];size_bytes:number;restored:boolean;undo_of:string|null;outcomes?:UnusedRemovalOutcome[]}
+export interface UnusedRemovalHistory {result:UnusedRemovalResult;state:string;error:string|null;undone_by:string|null;cleanup_pending:boolean}

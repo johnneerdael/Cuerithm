@@ -95,6 +95,9 @@ Mobile, cloud/streaming expansion, plays/last-played history, danceability,
 per-segment energy and renewed Mixed In Key cue inference are outside this
 roadmap. Audio-device selection and general backup-retention management require
 separate scope decisions rather than being silently folded into these features.
+Backup retention was decided separately in issue 46: the library keeps no copy of
+audio after a write settles, Undo and sync restore are bounded to ten operations,
+and `docs/development/lean-library-audit.md` lists every other retention and its bound.
 
 ## Evidence and limits
 

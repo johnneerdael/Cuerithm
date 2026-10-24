@@ -10,7 +10,7 @@
 |---|---|
 | A saved edit from **Edit metadata** | **Drafts and history → Undo saved changes**, below |
 | A match accepted with **Use selected match** on a finished track | The same place |
-| Tags written by automatic tagging, or a match accepted on a track still in Incoming | No Undo button. The original file is kept as a recovery backup, but CueRithm has no control that restores it. Correct the fields with [Edit tags and artwork](edit-tags-by-hand.md). |
+| Tags written by automatic tagging, or a match accepted on a track still in Incoming | No Undo button, and CueRithm keeps no copy of the original once the write has settled. Correct the fields with [Edit tags and artwork](edit-tags-by-hand.md). |
 | A cleanup | [Undo a cleanup](undo-cleanup.md) |
 | A rename or move | [Recover or undo a reorganisation](../rename/undo-organize.md) |
 | Categories and custom tags | The **Curate** tab in **Drafts and history**; see [Group tracks with categories and custom tags](curate-tracks.md) |
@@ -41,7 +41,7 @@ If the file is not in the state the save left it in, the button is not offered. 
 
 ## When Undo is not offered { #when-undo-is-not-offered }
 
-**Undo saved changes** appears only while the track is still ready and not archived, its file and tag records are unchanged since the save, and nothing else has claimed the file. Any later save, cleanup, rename, reorganisation, or an edit made in another program, turns it off for that entry. Undo the newest change first, or make a new edit that sets the values you want.
+**Undo saved changes** appears only while the track is still ready and not archived, its file and tag records are unchanged since the save, nothing else has claimed the file, and the save is one of your 10 newest (CueRithm 0.1.19 or later; an older entry stays in the history without the button). Any later save, cleanup, rename, reorganisation, or an edit made in another program, turns it off for that entry. Undo the newest change first, or make a new edit that sets the values you want.
 
 ## Find an unfinished edit { #drafts }
 
@@ -57,7 +57,7 @@ If CueRithm closed, the computer lost power or the connection to a drive dropped
 
 ## See how much space backups use { #recovery-backups }
 
-**Settings → Automatic tagging → Recovery backups** shows the number and size of the original files CueRithm has kept, and any temporary files that remain while cleanup is pending. Originals are retained, and backup retention controls are not finished, so the app has no button to delete or restore them. [Where CueRithm keeps your data](../files/library/where-data-lives.md) says where they live.
+**Settings → Automatic tagging → Recovery backups** shows the number and size of the original files CueRithm holds while a write is under way, and any temporary files that remain while cleanup is pending. A finished write holds none, so the row normally reads 0.0 MB · 0 files. Undo restores the values the entry lists under **Before**, not a copy of the file. [Where CueRithm keeps your data](../files/library/where-data-lives.md) says where the rest of the data lives.
 
 ## What can go wrong { #what-can-go-wrong }
 

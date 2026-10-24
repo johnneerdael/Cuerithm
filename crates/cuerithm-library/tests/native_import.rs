@@ -2,6 +2,7 @@ use cuerithm_library::*;
 use cuerithm_media::{CancellationToken, file_sha256};
 use cuerithm_rekordbox::*;
 use serde_json::{Value, json};
+use sha2::Digest;
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -258,13 +259,30 @@ fn native_reconciliation_rejects_changed_observations_unknown_fields_and_false_e
 }
 
 #[test]
-fn native_import_queues_new_sources_persists_scoped_ids_and_lossless_records_and_is_idempotent() {
+fn native_import_queues_new_sources_persists_scoped_ids_and_the_records_sync_reads_and_is_idempotent()
+ {
     let d = tempfile::tempdir().unwrap();
     let path = source(d.path(), "song.flac");
     let before = file_sha256(&path).unwrap();
     let db = d.path().join("library.sqlite");
     let lib = Library::open(&db).unwrap();
-    let input = collection("db-1", vec![track("db-1", "1", &path)]);
+    let mut input = collection("db-1", vec![track("db-1", "1", &path)]);
+    for table in [
+        "djmdPlaylist",
+        "djmdSongPlaylist",
+        "djmdMyTag",
+        "djmdSongMyTag",
+    ] {
+        input.records.get_mut(table).unwrap().push(TargetRecord {
+            table: table.into(),
+            id: "r1".into(),
+            fingerprint: "d".repeat(64),
+            values: BTreeMap::from([
+                ("Opaque".into(), TargetValue::Blob(vec![0, 255, 7])),
+                ("Nullable".into(), TargetValue::Null),
+            ]),
+        });
+    }
     let opts = options(&lib);
     let first = lib
         .import_rekordbox_collection(&input, opts.clone(), &CancellationToken::default())
@@ -281,13 +299,51 @@ fn native_import_queues_new_sources_persists_scoped_ids_and_lossless_records_and
     assert!(!link.fields["title"].acknowledged);
     assert_eq!(link.fields["bpm"].local, Value::Null);
     assert_eq!(link.fields["bpm"].remote, json!(128.5));
-    let raw = lib
-        .native_record(&first.target_id, "djmdContent", "1")
-        .unwrap()
+    // The tables native playlist sync reads back keep their records losslessly.
+    for table in [
+        "djmdPlaylist",
+        "djmdSongPlaylist",
+        "djmdMyTag",
+        "djmdSongMyTag",
+    ] {
+        let raw = lib
+            .native_record(&first.target_id, table, "r1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(raw.values["Opaque"], TargetValue::Blob(vec![0, 255, 7]));
+        assert_eq!(raw.values["Nullable"], TargetValue::Null);
+        assert_eq!(raw.fingerprint, "d".repeat(64));
+    }
+    // Any other record keeps its identity and the hash of its content, not the content.
+    assert!(
+        lib.native_record(&first.target_id, "djmdContent", "1")
+            .unwrap_err()
+            .to_string()
+            .contains("not kept")
+    );
+    assert!(
+        lib.native_record(&first.target_id, "djmdContent", "missing")
+            .unwrap()
+            .is_none()
+    );
+    let sql = rusqlite::Connection::open(&db).unwrap();
+    let (stored, hash): (String, String) = sql
+        .query_row(
+            "SELECT json,hash FROM native_records WHERE table_name='djmdContent' AND record_id='1'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .unwrap();
-    assert_eq!(raw.values["Opaque"], TargetValue::Blob(vec![0, 255, 7]));
-    assert_eq!(raw.values["Nullable"], TargetValue::Null);
-    assert_eq!(raw.values["DJPlayCount"], TargetValue::Integer(91));
+    assert_eq!(stored, "");
+    let record = &input.records["djmdContent"][0];
+    assert_eq!(
+        hash,
+        format!(
+            "{:x}",
+            sha2::Sha256::digest(serde_json::to_string(record).unwrap().as_bytes())
+        )
+    );
+    drop(sql);
     let again = lib
         .import_rekordbox_collection(&input, opts, &CancellationToken::default())
         .unwrap();
@@ -564,7 +620,7 @@ fn schema_ten_migration_preserves_legacy_links_and_native_import_enforces_foreig
     assert_eq!(
         sql.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        30
+        31
     );
     assert_eq!(
         sql.query_row(

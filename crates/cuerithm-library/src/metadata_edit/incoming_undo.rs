@@ -52,7 +52,35 @@ impl MetadataEditService {
                     "Incoming metadata changed after its saved revision"
                 );
                 let native = self.native_patch(&editor)?;
-                let inverse = self.inverse_incoming_patch(&old, &native, &receipt, cancel)?;
+                let inverse = self.inverse_patch(&native, &receipt, &mut |ordinal, identity| {
+                    // A picture kept as an artwork asset needs no original audio.
+                    if let Some(kept) = old
+                        .kept_pictures
+                        .iter()
+                        .flatten()
+                        .find(|picture| picture.ordinal == ordinal)
+                    {
+                        return self.library.metadata_artwork_content(&kept.asset_id);
+                    }
+                    ensure!(
+                        !old.original_retired,
+                        "The original artwork of this save is no longer available"
+                    );
+                    // Not retired yet: the picture is read from the original file this save kept.
+                    let original = old
+                        .stage
+                        .as_ref()
+                        .context("Missing original metadata snapshot for artwork Undo")?;
+                    super::previews::verify_backup(&self.library, original)?;
+                    let backup = crate::model::bytes_path(&original.backup)?;
+                    crate::artifacts::owned_file(
+                        &backup,
+                        &crate::model::bytes_path(&original.workspace)?,
+                        &original.before,
+                    )?;
+                    let info = self.runtime.probe_cancellable(&backup, cancel)?;
+                    cuerithm_autotag::metadata_artwork_bytes(&backup, &info, identity)
+                })?;
                 let (stage, after) = self.stage_row(&capture, &inverse, cancel)?;
                 Ok(FrozenRow {
                     public: MetadataEditRow {
@@ -67,6 +95,9 @@ impl MetadataEditService {
                     capture,
                     stage: Some(stage),
                     undo: Some(UndoLink::Override(job.clone())),
+                    kept_pictures: None,
+                    original_retired: false,
+                    patch: None,
                 })
             })();
             let row = match outcome {
@@ -90,12 +121,14 @@ impl MetadataEditService {
         }
         Ok(journaled)
     }
-    fn inverse_incoming_patch(
+    /// The patch that turns `receipt.after` back into `receipt.before`, for the fields `patch`
+    /// changed. `picture` supplies the bytes of an original picture the edit replaced or removed
+    /// (its position among the original pictures, and its identity).
+    pub(super) fn inverse_patch(
         &self,
-        old: &FrozenRow,
         patch: &MetadataPatch,
         receipt: &MetadataEditorReceipt,
-        cancel: &CancellationToken,
+        picture: &mut dyn FnMut(usize, &cuerithm_autotag::ArtworkIdentity) -> Result<Vec<u8>>,
     ) -> Result<MetadataPatch> {
         let before = &receipt.before;
         let after = &receipt.after;
@@ -172,7 +205,11 @@ impl MetadataEditService {
                     .unwrap_or(TextEdit::Clear),
             });
         }
-        if !patch.artwork.is_empty() {
+        // Pictures are only restored when the edit changed them. A save that replaced a picture
+        // with itself, or removed one and added the same one back, left the artwork as it was:
+        // there is nothing to put back, and no original picture was kept (the save keeps them
+        // under the same condition) for an Undo to ask for.
+        if !patch.artwork.is_empty() && before.artwork != after.artwork {
             let mut mapping = (0..before.artwork.len()).map(Some).collect::<Vec<_>>();
             let mut targets = patch
                 .artwork
@@ -202,18 +239,6 @@ impl MetadataEditService {
                 mapping.len() == after.artwork.len(),
                 "Prepared artwork identity receipt differs"
             );
-            let original = old
-                .stage
-                .as_ref()
-                .context("Missing original metadata snapshot for artwork Undo")?;
-            super::previews::verify_backup(&self.library, original)?;
-            let backup = crate::model::bytes_path(&original.backup)?;
-            crate::artifacts::owned_file(
-                &backup,
-                &crate::model::bytes_path(&original.workspace)?,
-                &original.before,
-            )?;
-            let info = self.runtime.probe_cancellable(&backup, cancel)?;
             for (index, origin) in mapping.iter().enumerate() {
                 if origin.is_none() {
                     inverse.artwork.push(ArtworkEdit {
@@ -233,11 +258,7 @@ impl MetadataEditService {
                 let value = ArtworkValue {
                     kind: previous.identity.kind,
                     description: previous.identity.description.clone(),
-                    bytes: cuerithm_autotag::metadata_artwork_bytes(
-                        &backup,
-                        &info,
-                        &previous.identity,
-                    )?,
+                    bytes: picture(index, &previous.identity)?,
                 };
                 let current = mapping.iter().position(|i| *i == Some(index));
                 inverse.artwork.push(ArtworkEdit {

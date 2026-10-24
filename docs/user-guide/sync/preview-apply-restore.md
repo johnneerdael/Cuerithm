@@ -100,6 +100,10 @@ Do your checking in the DJ program with a copy or a small playlist, and restore 
 
 Serato's backup includes the audio files whose tags it changed; a Pioneer USB conversion backs up and restores the affected copies on the stick.
 
+### How long a backup lasts { #backup-lasts }
+
+CueRithm keeps the backup of the newest 10 syncs of each DJ program. When an eleventh sync of the same program finishes, the oldest one stays in **Sync history** with its state and counts, and a line reads *The backup was removed after ten newer syncs of this program* (rekordbox: *of this database*). It has no **Restore backup** button any more, and the backup files it used are deleted from CueRithm's data folder. A restored sync, or one rolled back after an interruption, gives its backup up at once, because it cannot be restored twice. A sync that has not been finished or acknowledged keeps its backup however old it is. This limit needs CueRithm 0.1.19 or later; earlier versions kept every backup, including the audio copies of Serato and Pioneer USB syncs, without a limit.
+
 ## What can go wrong { #what-can-go-wrong }
 
 | What you see | Why | What to do |

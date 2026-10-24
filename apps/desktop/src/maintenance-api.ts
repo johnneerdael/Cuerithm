@@ -1,17 +1,12 @@
 import {invoke} from "@tauri-apps/api/core";
 import {listen} from "@tauri-apps/api/event";
-import type {UnusedBackupPreview,UnusedBackupDisposal,UnusedRemovalPreview,UnusedRemovalResult,UnusedRemovalHistory,DuplicateRecovery,DuplicateMergeResult,DuplicateMergePreview,DuplicateMergeHistory,DuplicateScanRequest,DuplicateScanReport,DuplicateReview,DuplicateReviewEdit,DuplicateIgnores,MaintenanceStamp,UnusedScanRequest,UnusedScanReport,BrokenScanRequest,BrokenScanReport,MaintenanceProgress,MaintenanceChange,MergeDisposition} from "./maintenance-types";
+import type {UnusedRemovalPreview,UnusedRemovalResult,UnusedRemovalHistory,DuplicateRecovery,DuplicateMergeResult,DuplicateMergePreview,DuplicateMergeHistory,DuplicateScanRequest,DuplicateScanReport,DuplicateReview,DuplicateReviewEdit,DuplicateIgnores,MaintenanceStamp,UnusedScanRequest,UnusedScanReport,BrokenScanRequest,BrokenScanReport,MaintenanceProgress,MaintenanceChange,MergeDisposition} from "./maintenance-types";
 
 // Give every long operation a fresh ID (crypto.randomUUID()) and retain it for cancellation.
 // A cancelled operation keeps the slot until its original promise settles.
 export const nativeMaintenance={
-  previewBackupDisposal:(operationId:string,ids:string[])=>invoke<UnusedBackupPreview>("maintenance_preview_backup_disposal",{operationId,ids}),
-  disposeBackups:(operationId:string,id:string)=>invoke<UnusedBackupDisposal>("maintenance_dispose_backups",{operationId,id}),
-  backupDisposalHistory:()=>invoke<UnusedBackupDisposal[]>("maintenance_backup_disposal_history"),
-  retryBackupDisposal:(operationId:string,id:string)=>invoke<UnusedBackupDisposal[]>("maintenance_retry_backup_disposal",{operationId,id}),
   previewUnusedRemoval:(operationId:string,scanId:string,selected:string[])=>invoke<UnusedRemovalPreview>("maintenance_preview_unused_removal",{operationId,scanId,selected}),
   applyUnusedRemoval:(operationId:string,id:string)=>invoke<UnusedRemovalResult>("maintenance_apply_unused_removal",{operationId,id}),
-  restoreUnusedRemoval:(operationId:string,id:string)=>invoke<UnusedRemovalResult>("maintenance_restore_unused_removal",{operationId,id}),
   unusedRemovalHistory:()=>invoke<UnusedRemovalHistory[]>("maintenance_unused_removal_history"),
   retryUnusedRecovery:(operationId:string,id:string)=>invoke<UnusedRemovalHistory[]>("maintenance_retry_unused_recovery",{operationId,id}),
   applyMerge:(operationId:string,id:string,confirmDeletion=false)=>invoke<DuplicateMergeResult>("maintenance_apply_merge",{operationId,id,confirmDeletion}),

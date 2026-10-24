@@ -58,7 +58,7 @@ Tab: **Manage files**.
 | Merge copies of the same track | [Find and merge duplicate tracks](../files/library/find-duplicates.md) |
 | Find tracks whose file went missing | [Find missing, moved or broken files](../files/library/find-missing-files.md) |
 | Clear out music that no track uses | [Find and remove unused files](../files/library/clean-up-unused-files.md) |
-| Undo a merge or bring back a removed file | [Undo a merge or restore removed files](../files/library/undo-maintenance.md) |
+| Undo a merge or bring back a removed file | [Undo a merge or put back removed files](../files/library/undo-maintenance.md) |
 | Save a copy of my playlists, cues and settings | [Back up your library](../files/library/back-up-library.md) |
 | Get that copy back | [Restore your library from a backup](../files/library/restore-library.md) |
 | Know where CueRithm keeps its files | [Where CueRithm keeps your data](../files/library/where-data-lives.md) |

@@ -96,6 +96,43 @@ impl Fixture {
         let conn = rusqlite::Connection::open(&self.db).unwrap();
         ["SELECT json_group_array(json_array(id,hex(path),title,artist,archived,source_hash,state,analysis_json,metadata_json,current_job)) FROM (SELECT * FROM tracks ORDER BY id)","SELECT json_group_array(json_array(id,state,stage,attempts,settings_revision)) FROM (SELECT * FROM jobs ORDER BY id)","SELECT json_group_array(json_array(id,track_id,job_id,json,created)) FROM (SELECT * FROM cue_revisions ORDER BY id)"].iter().map(|sql|conn.query_row(sql,[],|r|r.get(0)).unwrap()).collect()
     }
+    #[cfg(feature = "autotag")]
+    fn content_ignoring_file_identity(&self) -> Vec<String> {
+        let conn = rusqlite::Connection::open(&self.db).unwrap();
+        ["SELECT json_group_array(json_array(id,hex(path),title,artist,archived,state,analysis_json,current_job)) FROM (SELECT * FROM tracks ORDER BY id)","SELECT json_group_array(json_array(id,state,stage,attempts,settings_revision)) FROM (SELECT * FROM jobs ORDER BY id)","SELECT json_group_array(json_array(id,track_id,job_id,json,created)) FROM (SELECT * FROM cue_revisions ORDER BY id)"].iter().map(|sql|conn.query_row(sql,[],|r|r.get(0)).unwrap()).collect()
+    }
+    /// Every tag the keeper's file holds, and its decoded audio.
+    #[cfg(feature = "autotag")]
+    fn file_state(&self, index: usize) -> (cuerithm_autotag::TransferSnapshot, String) {
+        let path = &self.paths[index];
+        let tags =
+            cuerithm_autotag::read_transfer_metadata(path, &self.runtime.probe(path).unwrap())
+                .unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let pcm = self
+            .runtime
+            .decode(path, cache.path())
+            .unwrap()
+            .pcm_sha256()
+            .unwrap();
+        (tags, pcm)
+    }
+    /// The library describes the file the track really has.
+    #[cfg(feature = "autotag")]
+    fn assert_library_knows_file(&self, index: usize) {
+        let recorded: String = rusqlite::Connection::open(&self.db)
+            .unwrap()
+            .query_row(
+                "SELECT source_hash FROM tracks WHERE id=?1",
+                [&self.ids[index]],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            recorded,
+            cuerithm_media::file_sha256(&self.paths[index]).unwrap()
+        );
+    }
 }
 fn wav(path: &Path, seed: i32) {
     let spec = hound::WavSpec {
@@ -570,7 +607,7 @@ fn migration_from_v6_preserves_tracks_and_initializes_empty_maintenance() {
     assert_eq!(
         conn.query_row("pragma user_version", [], |r| r.get::<_, u32>(0))
             .unwrap(),
-        30
+        31
     );
     assert_eq!(
         conn.query_row(
@@ -1452,7 +1489,8 @@ fn coordinated_donor_merge_publishes_file_and_library_cues_grid_tags_and_reversi
         vec![f.ids[0].clone(), f.ids[2].clone(), f.ids[1].clone()],
     );
     let preview = donor_preview(&f);
-    let before = f.content();
+    let before = f.content_ignoring_file_identity();
+    let tags_before = f.file_state(0);
     let hashes = f
         .paths
         .iter()
@@ -1510,6 +1548,21 @@ fn coordinated_donor_merge_publishes_file_and_library_cues_grid_tags_and_reversi
         )
         .unwrap();
     assert!(cuejob.is_none());
+    // The merge recorded the keeper's previous tag values, so no copy of its audio is kept.
+    let named: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM maintenance_write_files WHERE backup IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(named, 0, "the journal names no copy of the original");
+    let kept: Vec<_> = walkdir::WalkDir::new(f.lib.data_dir().join("maintenance"))
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .collect();
+    assert!(kept.is_empty(), "audio left in the data folder: {kept:?}");
     drop(conn);
     assert_ne!(cuerithm_media::file_sha256(&f.paths[0]).unwrap(), hashes[0]);
     assert_eq!(cuerithm_media::file_sha256(&f.paths[1]).unwrap(), hashes[1]);
@@ -1519,8 +1572,18 @@ fn coordinated_donor_merge_publishes_file_and_library_cues_grid_tags_and_reversi
     let service = DuplicateMergeService::new(f.lib.clone(), f.runtime.clone());
     service.undo(&result.id, &token).unwrap();
     assert_eq!(f.lib.track(&f.ids[0]).unwrap().title, "Signal");
-    assert_eq!(cuerithm_media::file_sha256(&f.paths[0]).unwrap(), hashes[0]);
-    assert_eq!(f.content(), before);
+    // Undo wrote the keeper's previous tag values back: its tags and audio are what they were,
+    // and the library describes the file it now has.
+    assert_eq!(f.file_state(0), tags_before);
+    f.assert_library_knows_file(0);
+    assert_eq!(f.content_ignoring_file_identity(), before);
+    assert!(
+        walkdir::WalkDir::new(f.lib.data_dir().join("maintenance"))
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .all(|e| !e.file_type().is_file()),
+        "Undo leaves no copy of the audio either"
+    );
     assert!(service.undo(&result.id, &token).is_err());
 }
 
@@ -1530,7 +1593,7 @@ fn coordinated_merge_rolls_back_exchanged_files_when_sql_publication_fails() {
     use cuerithm_library::DuplicateMergeService;
     let f = Fixture::new();
     let preview = donor_preview(&f);
-    let before = f.content();
+    let before = f.content_ignoring_file_identity();
     let hash = cuerithm_media::file_sha256(&f.paths[0]).unwrap();
     let conn = rusqlite::Connection::open(&f.db).unwrap();
     conn.execute_batch("CREATE TRIGGER fail_donor_publish BEFORE UPDATE OF source_hash ON tracks WHEN NEW.source_hash IS NOT OLD.source_hash BEGIN SELECT RAISE(ABORT,'injected publication failure'); END;").unwrap();
@@ -1540,7 +1603,7 @@ fn coordinated_merge_rolls_back_exchanged_files_when_sql_publication_fails() {
             .apply(&preview.id, &CancellationToken::default())
             .is_err()
     );
-    assert_eq!(f.content(), before);
+    assert_eq!(f.content_ignoring_file_identity(), before);
     assert_eq!(cuerithm_media::file_sha256(&f.paths[0]).unwrap(), hash);
     conn.execute_batch("DROP TRIGGER fail_donor_publish;")
         .unwrap();
@@ -1550,7 +1613,8 @@ fn coordinated_merge_rolls_back_exchanged_files_when_sql_publication_fails() {
     service
         .undo(&applied.id, &CancellationToken::default())
         .unwrap();
-    assert_eq!(f.content(), before);
+    assert_eq!(f.content_ignoring_file_identity(), before);
+    f.assert_library_knows_file(0);
 }
 
 #[cfg(feature = "autotag")]
@@ -1729,7 +1793,7 @@ fn schema8_migration_preserves_legacy_analysis_cue_ownership_and_enables_manual_
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))
             .unwrap(),
-        30
+        31
     );
     assert_eq!(
         conn.query_row(
@@ -1790,7 +1854,8 @@ fn coordinated_donor_publication_and_undo_cover_all_fourteen_audio_layouts() {
                 .unwrap();
         }
         let preview = donor_preview(&f);
-        let before = f.content();
+        let before = f.content_ignoring_file_identity();
+        let tags_before = f.file_state(0);
         let hash = cuerithm_media::file_sha256(&f.paths[0]).unwrap();
         let donor_hash = cuerithm_media::file_sha256(&f.paths[1]).unwrap();
         let token = CancellationToken::default();
@@ -1806,8 +1871,11 @@ fn coordinated_donor_publication_and_undo_cover_all_fourteen_audio_layouts() {
         service
             .undo(&applied.id, &token)
             .unwrap_or_else(|e| panic!("undo {}: {e:#}", case["file"]));
-        assert_eq!(f.content(), before);
-        assert_eq!(cuerithm_media::file_sha256(&f.paths[0]).unwrap(), hash);
+        assert_eq!(f.content_ignoring_file_identity(), before);
+        // Every tag and every decoded sample are what they were, in every format.
+        assert_eq!(f.file_state(0), tags_before, "{}", case["file"]);
+        f.assert_library_knows_file(0);
+        let _ = hash;
     }
 }
 

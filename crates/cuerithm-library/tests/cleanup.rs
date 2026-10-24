@@ -4,11 +4,21 @@ use cuerithm_media::file_sha256;
 #[path = "support/cleanup_fixture.rs"]
 mod fixture;
 use fixture::{Fixture, config};
+/// The decoded audio of a file, whatever its tags.
+fn pcm_of(f: &Fixture, path: &std::path::Path) -> String {
+    f.rt.decode(path, &f.lib.data_dir().join("pcm"))
+        .unwrap()
+        .pcm_sha256()
+        .unwrap()
+}
 #[test]
 fn preview_is_read_only_and_selected_apply_and_undo_preserve_analysis_and_cues() {
     let f = Fixture::new(2);
     let service = f.service();
     let before: Vec<_> = f.paths.iter().map(|p| std::fs::read(p).unwrap()).collect();
+    let before_tags =
+        cuerithm_autotag::read_metadata(&f.paths[0], &f.rt.probe(&f.paths[0]).unwrap()).unwrap();
+    let before_pcm = pcm_of(&f, &f.paths[0]);
     let analyses: Vec<_> = f
         .ids
         .iter()
@@ -48,8 +58,18 @@ fn preview_is_read_only_and_selected_apply_and_undo_preserve_analysis_and_cues()
     }
     let undone = service.undo_cleanup(&applied.id).unwrap();
     assert_eq!(undone.applied, vec![f.ids[0].clone()]);
-    assert_eq!(std::fs::read(&f.paths[0]).unwrap(), before[0]);
+    // Undo writes the recorded tag values back: the audio and every tag are what they were.
+    assert_eq!(
+        cuerithm_autotag::read_metadata(&f.paths[0], &f.rt.probe(&f.paths[0]).unwrap()).unwrap(),
+        before_tags
+    );
+    assert_eq!(pcm_of(&f, &f.paths[0]), before_pcm);
     assert_eq!(f.lib.track(&f.ids[0]).unwrap().title, "signal__track 0");
+    assert_eq!(
+        f.lib.track(&f.ids[0]).unwrap().source_sha256,
+        file_sha256(&f.paths[0]).unwrap(),
+        "the library knows the file it now has"
+    );
     assert_eq!(f.lib.cue_revision_count(&f.ids[0]).unwrap(), 1);
     let history = service.cleanup_history().unwrap();
     assert_eq!(
@@ -144,7 +164,7 @@ fn persisted_history_supports_undo_after_restart_and_preserves_later_file_edits(
 }
 
 #[test]
-fn cleanup_and_exact_undo_cover_all_native_audio_formats_and_historical_cues() {
+fn cleanup_and_undo_cover_all_native_audio_formats_and_historical_cues() {
     use cuerithm_autotag::{
         AnalysisTags, AutotagConfig, FieldChange, MatchStatus, MetadataField, TagInput,
         TagMatchOutcome, TagWritePlan, read_metadata,
@@ -205,7 +225,8 @@ fn cleanup_and_exact_undo_cover_all_native_audio_formats_and_historical_cues() {
         f.lib
             .apply_analysis_for_run(&run, &fixture::result(), &f.rt.probe(path).unwrap())
             .unwrap();
-        let original = std::fs::read(path).unwrap();
+        let original_tags = read_metadata(path, &f.rt.probe(path).unwrap()).unwrap();
+        let original_pcm = pcm_of(&f, path);
         let cues = f.lib.cue_revision_count(&f.ids[0]).unwrap();
         let analysis = serde_json::to_value(f.lib.analysis(&f.ids[0]).unwrap()).unwrap();
         assert_eq!(cues, 2);
@@ -238,7 +259,14 @@ fn cleanup_and_exact_undo_cover_all_native_audio_formats_and_historical_cues() {
             row["file"],
             undone.failed
         );
-        assert_eq!(std::fs::read(path).unwrap(), original);
+        // Every tag and every decoded sample are what they were, in every format.
+        assert_eq!(
+            read_metadata(path, &f.rt.probe(path).unwrap()).unwrap(),
+            original_tags,
+            "{}",
+            row["file"]
+        );
+        assert_eq!(pcm_of(&f, path), original_pcm, "{}", row["file"]);
         assert_eq!(f.lib.cue_revision_count(&f.ids[0]).unwrap(), cues);
     }
 }

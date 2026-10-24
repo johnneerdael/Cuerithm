@@ -58,7 +58,7 @@ export default function TaggingSettings({bridge,config,enabled,onChange,catalogR
   return <section className="setting-section tagging-settings">
     <div className="setting-heading"><div><h2>Automatic tagging</h2><p>Apply these settings to every incoming track after analysis.</p></div></div>
     <Toggle label="Automatic tagging" value={enabled} onChange={value=>onChange(current,value)} note="Catalog lookups use an internet connection. Analysis and cue generation work offline."/>
-    <div className="setting-row"><div><strong>Recovery backups</strong><p>Original file backups are retained in application data. Temporary files remain while cleanup is pending.</p>{retainedCleanup?<p>{retainedCleanup}</p>:null}</div><span className="fixed-setting">{storage?`${(storage.original_bytes/1048576).toFixed(1)} MB · ${storage.original_files} files`:"Storage unavailable"}</span></div>
+    <div className="setting-row"><div><strong>Recovery backups</strong><p>A copy of the audio is kept only while a write is under way. Undo restores the previous tags from the library, not from a copy of the file. Temporary files remain while cleanup is pending.</p>{retainedCleanup?<p>{retainedCleanup}</p>:null}</div><span className="fixed-setting">{storage?`${(storage.original_bytes/1048576).toFixed(1)} MB · ${storage.original_files} files`:"Storage unavailable"}</span></div>
     {setupError?<p role="alert" className="provider-setup-message">{setupError}<button className="back-link" onClick={()=>void refreshSetup()}>Refresh provider setup</button></p>:null}
     <div className="provider-order" aria-label="Catalog providers">{ordered.map(id=>{
       const provider=catalog.providers.find(p=>p.id===id);if(!provider)return null;

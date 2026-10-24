@@ -115,7 +115,7 @@ fn reserved(service: &MetadataEditService, track: &str) -> (String, String) {
         )
         .unwrap();
     let write = service
-        .begin_write_owned(&batch.id, &row, &frozen.rows[0], None, None)
+        .begin_write_owned(&batch.id, &row, &frozen.rows[0], None, None, None)
         .unwrap();
     (batch.id, write)
 }
@@ -456,6 +456,13 @@ fn undo_journals_every_row_before_restoring_any_file_and_recovery_finishes_them(
         file_sha256(&first_path).unwrap(),
         file_sha256(&second_path).unwrap(),
     ];
+    let original_tags: Vec<_> = service
+        .snapshot(&[first.clone(), second.clone()])
+        .unwrap()
+        .tracks
+        .into_iter()
+        .map(|t| t.native)
+        .collect();
     let draft = service
         .create_draft(&[first.clone(), second.clone()])
         .unwrap();
@@ -524,8 +531,15 @@ fn undo_journals_every_row_before_restoring_any_file_and_recovery_finishes_them(
         .recover(&undo, &CancellationToken::default())
         .unwrap();
     assert_eq!(batch.state, "undone", "{batch:?}");
-    assert_eq!(file_sha256(&first_path).unwrap(), original[0]);
-    assert_eq!(file_sha256(&second_path).unwrap(), original[1]);
+    // Undo wrote the previous values back, so the files are not the original bytes.
+    let restored_tags: Vec<_> = service
+        .snapshot(&[first.clone(), second.clone()])
+        .unwrap()
+        .tracks
+        .into_iter()
+        .map(|t| t.native)
+        .collect();
+    assert_eq!(restored_tags, original_tags);
     let conn = service.library.conn().unwrap();
     let linked: i64 = conn
         .query_row(
@@ -548,4 +562,148 @@ fn undo_journals_every_row_before_restoring_any_file_and_recovery_finishes_them(
             .unwrap()
             .can_undo
     );
+}
+
+/// A save from an earlier version still keeps its original for Undo, and the library backup
+/// binds that file until the save is undone or leaves the Undo window.
+#[test]
+fn a_save_from_an_earlier_version_keeps_its_original_bound_to_the_library_backup() {
+    let (temp, service, track, path) = fixture();
+    let (batch, id) = reserved(&service, &track);
+    service
+        .publish_write(&id, &CancellationToken::default())
+        .unwrap();
+    assert_eq!(service.finish_batch(&batch).unwrap().state, "saved");
+    // The fixture's preparation job never runs; a backup waits for preparation to finish.
+    service
+        .library
+        .conn()
+        .unwrap()
+        .execute("UPDATE jobs SET state='completed'", [])
+        .unwrap();
+    let destination = temp.path().join("backups");
+    let backup = service.library.create_library_backup(&destination).unwrap();
+    let original = service
+        .load_write(&id)
+        .unwrap()
+        .1
+        .artifact()
+        .unwrap()
+        .backup
+        .unwrap();
+    assert!(
+        original.exists(),
+        "an earlier-version save keeps its original"
+    );
+    let bytes = std::fs::read(&original).unwrap();
+    std::fs::write(&original, b"later external original edit").unwrap();
+    assert!(
+        service
+            .library
+            .inspect_library_backup(&backup.path)
+            .is_err()
+    );
+    assert!(service.library.create_library_backup(&destination).is_err());
+    std::fs::write(&original, bytes).unwrap();
+    // Undone, the save no longer needs it: the original and its folder go.
+    let undone = service.undo(&batch, &CancellationToken::default()).unwrap();
+    assert_eq!(undone.state, "undone", "{undone:?}");
+    assert!(!original.exists());
+    assert!(!original.parent().unwrap().exists());
+    assert!(service.library.create_library_backup(&destination).is_ok());
+    assert!(path.exists());
+}
+
+/// A save interrupted after it was journaled but before its write was created is recovered
+/// with the change it was asked to make, so it is undone from values and does not keep the
+/// original audio.
+#[test]
+fn a_save_interrupted_before_its_write_exists_recovers_with_its_recorded_change() {
+    let (_temp, service, track, path) = fixture();
+    let draft = service.create_draft(std::slice::from_ref(&track)).unwrap();
+    let mut patch = MetadataEditorPatch::default();
+    patch.fields.text.insert(
+        MetadataTextField::Title,
+        TextEdit::Set {
+            values: vec!["Recovered title".into()],
+        },
+    );
+    let draft = service
+        .update_draft(&draft.id, draft.revision, patch)
+        .unwrap();
+    let preview = service
+        .preview(&draft.id, draft.revision, &CancellationToken::default())
+        .unwrap();
+    let original = file_sha256(&path).unwrap();
+    let error = service.apply_linked_with(&preview.id, &CancellationToken::default(), None, || {
+        anyhow::bail!("synthetic crash after the save was journaled")
+    });
+    assert!(error.is_err());
+    let conn = service.library.conn().unwrap();
+    let batch: String = conn
+        .query_row("SELECT id FROM metadata_edit_batches", [], |r| r.get(0))
+        .unwrap();
+    let writes: i64 = conn
+        .query_row("SELECT COUNT(*) FROM metadata_edit_writes", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    drop(conn);
+    assert_eq!(writes, 0, "the interruption came before any write");
+    let journaled: Option<String> = service
+        .library
+        .conn()
+        .unwrap()
+        .query_row(
+            "SELECT json_type(payload_json,'$.patch') FROM metadata_edit_rows",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(journaled.as_deref(), Some("object"));
+    assert_eq!(file_sha256(&path).unwrap(), original);
+    let root = service.library.data_dir().to_path_buf();
+    let runtime = service.runtime.clone();
+    drop(service);
+    let lib = Library::open(&root.join("library.sqlite")).unwrap();
+    lib.recover_metadata_edits().unwrap();
+    let service = MetadataEditService::new(lib, runtime);
+    let recovered = service
+        .recover(&batch, &CancellationToken::default())
+        .unwrap();
+    assert_eq!(recovered.state, "saved", "{recovered:?}");
+    let id: String = service
+        .library
+        .conn()
+        .unwrap()
+        .query_row("SELECT id FROM metadata_edit_writes", [], |r| r.get(0))
+        .unwrap();
+    let (_, write) = service.load_write(&id).unwrap();
+    let recorded = write
+        .editor_patch
+        .as_ref()
+        .expect("the recovered save records its change");
+    assert!(recorded.fields.text.contains_key(&MetadataTextField::Title));
+    assert!(write.backup_retired, "the original was not retired");
+    let backup = write.artifact().unwrap().backup;
+    assert!(
+        backup.as_ref().is_none_or(|backup| !backup.exists()),
+        "the original audio was kept"
+    );
+    assert_ne!(file_sha256(&path).unwrap(), original);
+    // The patch kept for the unstarted row is gone once the write holds it.
+    let kept: Option<String> = service
+        .library
+        .conn()
+        .unwrap()
+        .query_row(
+            "SELECT json_type(payload_json,'$.patch') FROM metadata_edit_rows",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(kept, None);
+    // And the save can be undone from the recorded values.
+    let undone = service.undo(&batch, &CancellationToken::default()).unwrap();
+    assert_eq!(undone.state, "undone", "{undone:?}");
 }

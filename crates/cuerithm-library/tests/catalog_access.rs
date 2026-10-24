@@ -122,7 +122,7 @@ fn main_schema_thirteen_upgrades_without_losing_detected_restrictions() {
         connection
             .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        30
+        31
     );
     for table in [
         "organization_operations",

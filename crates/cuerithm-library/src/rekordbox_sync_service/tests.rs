@@ -1,7 +1,9 @@
 use super::*;
 use std::cell::Cell;
+mod ledger_upgrade;
 mod native_acceptance;
 mod native_reorder_ack;
+mod restore_bound;
 const KEY: &[u8] = b"authored native coordinator fixture";
 fn key() -> DatabaseKey {
     DatabaseKey::new(KEY).unwrap()

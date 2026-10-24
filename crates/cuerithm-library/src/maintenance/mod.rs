@@ -10,6 +10,7 @@ pub use donors::DuplicateMergeService;
 mod model;
 mod purge;
 mod review;
+mod saved;
 mod scan;
 mod track_removal;
 mod trash;

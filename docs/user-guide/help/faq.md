@@ -10,7 +10,7 @@ If your question is about a symptom, start with [Fix a problem](troubleshooting/
 
 Analysis, playback, playlists and smart playlists never write to your files. CueRithm writes to a file only when you ask it to:
 
-- Automatic tagging and Cleanup change tags. They write to a staged copy, decode it again to check that the playable audio is identical, and keep the original ([How are tags written safely?](../how-it-works/tag-writing.md)). Both are off until you switch them on.
+- Automatic tagging and Cleanup change tags. They write to a staged copy, decode it again to check that the playable audio is identical, and hold the original until the write has settled ([How are tags written safely?](../how-it-works/tag-writing.md)). Both are off until you switch them on.
 - **Edit metadata** changes the tags you edit ([Edit tags and artwork](../tagging/edit-tags-by-hand.md)).
 - **Curate** writes to file tags only if you map categories to file fields ([Group tracks with categories and custom tags](../tagging/curate-tracks.md)).
 - **Organize files** can rename, move or copy files ([Rename and sort files into folders](../rename/organize-files.md)).
@@ -22,11 +22,11 @@ Not by default. Incoming, Tracks and Archive are states inside the library, and 
 
 ### Can I undo what CueRithm changed? { #undo }
 
-Mostly, yes. Cleanup has **Undo** ([Undo a cleanup](../tagging/undo-cleanup.md)), tag edits have history ([Undo a tag change](../tagging/tag-history.md)), a reorganisation can be reversed ([Recover or undo a reorganisation](../rename/undo-organize.md)), a sync has **Restore backup** ([Preview, apply and restore a sync](../sync/preview-apply-restore.md)), a duplicate merge has **Undo merge**, and removing the records of missing tracks has **Undo removal**, for your last 10 removals ([Undo a merge or restore removed files](../files/library/undo-maintenance.md)).
+Mostly, yes. Cleanup has **Undo** ([Undo a cleanup](../tagging/undo-cleanup.md)), tag edits have history ([Undo a tag change](../tagging/tag-history.md)), a reorganisation can be reversed ([Recover or undo a reorganisation](../rename/undo-organize.md)), a sync has **Restore backup** ([Preview, apply and restore a sync](../sync/preview-apply-restore.md)), a duplicate merge has **Undo merge**, and removing the records of missing tracks has **Undo removal**, for your last 10 removals ([Undo a merge or put back removed files](../files/library/undo-maintenance.md)).
 
 ### Where are my original files after a tag write? { #originals }
 
-CueRithm keeps the original bytes of every file it changes, in its data folder under `tagging/`. **Settings** → **Automatic tagging** shows them as **Recovery backups**. There is no retention control yet ([What CueRithm does not do yet](not-available-yet.md#backup-retention)). [Where CueRithm keeps your data](../files/library/where-data-lives.md) lists the folders.
+Your file is the tagged one, in the same folder. While a write is under way CueRithm holds a copy of the original in its data folder under `tagging/`, and deletes it when the write has settled. **Settings** → **Automatic tagging** shows what it holds as **Recovery backups**. Undo of a cleanup or a manual edit writes back the tags it recorded, not a copy of the file ([What CueRithm does not do yet](not-available-yet.md#backup-retention)). [Where CueRithm keeps your data](../files/library/where-data-lives.md) lists the folders.
 
 ### Is my music uploaded anywhere? { #uploads }
 

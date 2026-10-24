@@ -140,7 +140,7 @@ On success it prints one line of JSON and the version it reports is the one you 
 | Windows | `%APPDATA%\com.cuerithm.app` |
 | Linux | `~/.local/share/com.cuerithm.app` |
 
-It holds `library.sqlite` (the library), the artwork and waveform caches, `tagging/` (the original files CueRithm keeps so that Undo works), `library-backups/` and the key model's installed copy. Your music is not in it. By default your audio stays where it is; the optional [Rename and sort files into folders](../rename/organize-files.md) is the only feature that renames, moves or copies it. [Where CueRithm keeps your data](../files/library/where-data-lives.md) explains each part.
+It holds `library.sqlite` (the library), the artwork and waveform caches, `tagging/` (the copy of a file while it is being written), `library-backups/` and the key model's installed copy. Your music is not in it. By default your audio stays where it is; the optional [Rename and sort files into folders](../rename/organize-files.md) is the only feature that renames, moves or copies it. [Where CueRithm keeps your data](../files/library/where-data-lives.md) explains each part.
 
 !!! note "A separate profile"
     Set the environment variable `CUERITHM_DATA_DIR` to a folder and CueRithm uses that folder as its data folder, which gives you a second, empty library for experiments.

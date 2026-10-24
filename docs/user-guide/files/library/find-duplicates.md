@@ -81,7 +81,7 @@ Check three things:
 
 Open the **History & recovery** tab. Under **Duplicate merges**, the newest entry reads **Duplicate merge** with the time and the counts *1 archived · 0 restored · 0 updated · 1 playlists*. Select **Undo merge**. The message reads *Merge undone. Original files and library state restored.* The archived copy returns to **Tracks** and the playlists are as they were.
 
-Undo works only while nothing relevant has changed since. [Undo a merge or restore removed files](undo-maintenance.md) lists exactly what blocks it.
+Undo works only while nothing relevant has changed since. [Undo a merge or put back removed files](undo-maintenance.md) lists exactly what blocks it.
 
 ## Delete the extra files instead { #delete }
 
@@ -115,7 +115,7 @@ When you select the button, the message reads, for example, *Merge complete. 2 f
 
 **Tags from a donor.** If you chose a **Tag and cue donor**, its tags, cues and grid are copied onto the keeper first. Without a donor, the removed tracks' tags and cues leave the library with their records.
 
-**Undo brings back the records, not the files.** **Undo merge** restores the library records, their playlist places and their metadata, but it cannot take a file out of the Trash. Restore the files from the Trash yourself; Undo refuses to run if a different file now sits where a removed track's file was, and if the restored file was already added again as a new track. CueRithm keeps the records for your last 10 removals, counting duplicate merges that delete files and [Missing & broken removals](find-missing-files.md#remove) together; after that the removal is final. See [Undo a merge or restore removed files](undo-maintenance.md#undo-delete).
+**Undo brings back the records, not the files.** **Undo merge** restores the library records, their playlist places and their metadata, but it cannot take a file out of the Trash. Restore the files from the Trash yourself; Undo refuses to run if a different file now sits where a removed track's file was, and if the restored file was already added again as a new track. CueRithm keeps the records for your last 10 removals, counting duplicate merges that delete files and [Missing & broken removals](find-missing-files.md#remove) together; after that the removal is final. Merges that only archive count toward the same 10. See [Undo a merge or put back removed files](undo-maintenance.md#undo-delete).
 
 Removing a track also clears what was built from it: its cached waveforms, fingerprints and analysis results, and the saved scans that listed it. The cover art stays until the removal can no longer be undone.
 
@@ -164,7 +164,7 @@ A preference changes a group only when it finds a better track, and it skips loc
 
 The copy with the best audio is not always the copy with the best work. Choose it as **Keeper**, then pick the other copy under **Tag and cue donor**. On apply, the donor's artist, title, genre, key, BPM, energy, comment, label and the other tag fields, its cues and its beatgrid are copied onto the keeper. Empty donor cues or grid leave the keeper's own in place.
 
-This is the one step that writes to a music file: the keeper's file gets the donor's tags. CueRithm keeps the keeper's original bytes, and **Undo merge** puts them back. Both tracks must be finished in **Tracks**; a track still in Incoming stops the merge with *Prepare incoming tracks before merging*.
+This is the one step that writes to a music file: the keeper's file gets the donor's tags. CueRithm records the keeper's tags from before the copy, and **Undo merge** writes them back (CueRithm 0.1.19 or later). It keeps no copy of the audio, and the audio of the file never changes. Both tracks must be finished in **Tracks**; a track still in Incoming stops the merge with *Prepare incoming tracks before merging*.
 
 **Lock group** protects a group from preferences and from being selected. When a locked group has a donor, **Unlock for copy only** copies the donor's tags, cues and grid onto the other copies and archives nothing, and **Unlock for merge** makes it a normal merge.
 
@@ -199,7 +199,7 @@ For tracks the scan left out, see [Find missing, moved or broken files](find-mis
 
 ## Next steps
 
-- [Undo a merge or restore removed files](undo-maintenance.md)
+- [Undo a merge or put back removed files](undo-maintenance.md)
 - [Find missing, moved or broken files](find-missing-files.md)
 - [Remove the records of files that are gone](find-missing-files.md#remove)
 - [Archive tracks you no longer play](../archive.md)

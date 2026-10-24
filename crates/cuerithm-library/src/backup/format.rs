@@ -142,7 +142,7 @@ impl LogicalArchive {
                 producer: Producer {
                     app: "CueRithm".into(),
                     version: env!("CARGO_PKG_VERSION").into(),
-                    source_schema: 30,
+                    source_schema: 31,
                     platform: std::env::consts::OS.into(),
                 },
                 required_features: FEATURES.iter().map(|s| s.to_string()).collect(),

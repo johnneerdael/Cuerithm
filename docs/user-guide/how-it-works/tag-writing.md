@@ -4,7 +4,7 @@
 
 !!! abstract "What this means for you"
     - **Your audio samples are verified unchanged.** The tagged copy is decoded again and must hold identical audio before it replaces your file. A mismatch stops the write with *Tagging changed playable audio or timeline*.
-    - **The original is kept.** CueRithm retains the original bytes of every file it changes, without a time or size limit. There are no general retention controls yet, so this space grows. See [Where CueRithm keeps your data](../files/library/where-data-lives.md).
+    - **The original is kept only while the write is under way.** CueRithm holds a copy of the file in the data folder until the write has settled, then deletes it. Undo of a manual cleanup or edit writes back the tag values recorded before the change, so no copy of your audio stays. See [Where CueRithm keeps your data](../files/library/where-data-lives.md).
     - **Your later edits win.** If you change a file while CueRithm is recovering, rollback stops with *Later user edit preserved; original backup retained* instead of overwriting you.
     - **Automatic tagging has no Undo button.** Manual Cleanup and manual metadata edits do: see [Undo a tag change](../tagging/tag-history.md) and [Undo a cleanup](../tagging/undo-cleanup.md).
 
@@ -32,7 +32,7 @@ If the setting says v2.4 and a file has v2.3, it is upgraded when a write is nee
 ## The safeguards { #the-seven-safeguards }
 
 1. **Snapshot.** The decoder copies the source to a private snapshot and checks its SHA-256 before and after the copy. A change aborts the write (*Source changed during capture*).
-2. **Two copies.** CueRithm copies the snapshot into the data folder as `original.<ext>` (your recovery backup) and `staged.<ext>`, and checks the original's hash again.
+2. **Two copies.** CueRithm copies the snapshot into the data folder as `original.<ext>` (your recovery backup while the write is under way) and `staged.<ext>`, and checks the original's hash again.
 3. **Edit the copy only.** If an existing tag cannot be read, or an ID3 tag looks malformed, CueRithm refuses the write rather than discard it.
 4. **Verify the audio.** The staged file is decoded again and must have the same frame count and an identical PCM hash. For cleanup and edits, the tags read back must also equal the intended values exactly (*Metadata cannot be represented exactly in this tag format*). A field you marked required must be present afterwards.
 5. **Check the source again.** CueRithm hashes the original file once more to confirm you have not changed it in the meantime.
@@ -48,9 +48,11 @@ If the setting says v2.4 and a file has v2.3, it is upgraded when a write is nee
 
 ## Backups and retention { #backups }
 
-The original bytes of every changed file stay under `tagging/<workspace>/original.<ext>` in the data folder. Manual cleanup and manual metadata edits keep theirs under `cleanup/` and `metadata-edits/`. A write that changes nothing keeps no backup, and redundant staged copies are removed after the swap is durable. The total appears as **Recovery backups** on **Settings → Automatic tagging**.
+While a write is under way the original bytes of the changed file are in the data folder under `tagging/<workspace>/original.<ext>`, and manual cleanup and manual metadata edits use `cleanup/` and `metadata-edits/`. They are what rollback and crash recovery read. When the write has settled (it committed, or it was rolled back) CueRithm deletes the copy and its folder. A write that changes nothing keeps no backup, and redundant staged copies are removed after the swap is durable. The total of the copies that exist appears as **Recovery backups** on **Settings → Automatic tagging**; it is normally zero.
 
-There is no retention manager yet. Originals stay until a retention action exists, and you should not delete the folders: they are what Undo and rollback use. Only manual Cleanup and manual edits offer an Undo button; automatic tagging in Incoming keeps its original but offers no restore button.
+Undo does not need the original. A manual cleanup or manual edit records the tag values it replaced, and Undo writes those values back into the file as it is now, through the same staged, checked and journaled write (CueRithm 0.1.19 or later; earlier versions kept the original file for ever and Undo copied it back). Artwork you replaced by hand is kept, because artwork is part of the library. Only the 10 newest manual cleanups and edits can be undone. Automatic tagging in Incoming has no Undo button.
+
+A library from an earlier version still holds those copies. When CueRithm starts it deletes the ones whose write has settled, a few hundred writes at a time, and only files it created inside its own data folder.
 
 ## Why WMA uses TagLib { #taglib }
 

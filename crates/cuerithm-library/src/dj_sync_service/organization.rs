@@ -250,6 +250,7 @@ impl Library {
             ownership_restored: None,
             restore_acknowledged: false,
             preview_registration: String::new(),
+            restore_expired: false,
         };
         atomic_json(&transaction.path().join("library.json"), &saved)?;
         let mut ledger = ownership::read(&root, &target)?;

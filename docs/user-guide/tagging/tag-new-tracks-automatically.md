@@ -9,7 +9,7 @@
 - [ ] Two or three music files to practise on, copied out of your purchase folder (for example from `~/Music/Beatport`)
 
 !!! tip "Practise on copies"
-    Tagging rewrites the tags inside your files. CueRithm checks that the audio is unchanged and keeps the original as a recovery backup, but the app has no button that restores it. Copy a few files to a practice folder first. The examples below use `Man Like Me (Extended Mix)`.
+    Tagging rewrites the tags inside your files. CueRithm checks that the audio is unchanged, but it keeps no copy of the original once the write is done and the app has no button that restores it. Copy a few files to a practice folder first. The examples below use `Man Like Me (Extended Mix)`.
 
 ## 1. Switch on automatic tagging { #switch-on }
 
@@ -83,7 +83,7 @@ A warning triangle means CueRithm stopped rather than guess. Typical reasons are
     - CueRithm writes tags to a staged copy, never into your file in place.
     - It decodes that copy again and compares it with the original, frame for frame. A mismatch stops the write.
     - If you change the file in another program while CueRithm works, the write stops and the track is prepared again.
-    - The original stays as a recovery backup. **Settings → Automatic tagging → Recovery backups** shows how much space the backups use.
+    - The original is kept only until the write has settled. **Settings → Automatic tagging → Recovery backups** shows the copies that exist while a write is under way.
 
     See [How are tags written safely?](../how-it-works/tag-writing.md) for the full sequence.
 

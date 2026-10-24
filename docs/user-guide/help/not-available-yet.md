@@ -42,9 +42,9 @@ You can correct cues, loops and the beatgrid by hand, but not the measured key. 
 
 Saved loops are kept with their start and end and are sent to DJ software that supports them. The player does not repeat a loop: local preview seeks instead of looping ([Set a loop](../analysis/corrections/set-loops.md)).
 
-### Backup retention controls { #backup-retention }
+### A way to choose how long Undo lasts { #backup-retention }
 
-CueRithm keeps the original file bytes of every tag write and cleanup, and nothing deletes them. Cleanup has **Undo**, and Sync history offers a guarded **Restore backup** and recovery for interrupted work. Disposal of backups is explicit only for reviewed unused-file removals. General retention settings are unfinished. The size is shown as **Recovery backups** in **Settings** → **Automatic tagging**.
+From CueRithm 0.1.19 or later CueRithm keeps no copy of your audio after a write has settled, and Undo lasts for your 10 newest merges, removals, cleanups, tag edits and syncs per DJ program. The number is fixed: there is no setting to change it or to keep more. Cleanup has **Undo**, and Sync history offers a guarded **Restore backup** and recovery for interrupted work. A file you removed as unused is in the Trash, not in CueRithm. The copies of writes that are under way are shown as **Recovery backups** in **Settings** → **Automatic tagging**.
 
 ### An audio device picker { #no-device-picker }
 
@@ -66,7 +66,7 @@ There is no Intel Mac build. Windows and Linux builds are unsigned, and their na
 
 ### Older versions cannot open a newer library { #library-schema }
 
-The library schema is version 30. An older CueRithm refuses a library that a newer one has opened, with `Library schema is newer than this application`, and there is no downgrade. [Back up your library](../files/library/back-up-library.md) before you update.
+The library schema is version 31. An older CueRithm refuses a library that a newer one has opened, with `Library schema is newer than this application`, and there is no downgrade. [Back up your library](../files/library/back-up-library.md) before you update.
 
 ### Measured agreement, not accuracy { #accuracy-not-measured }
 

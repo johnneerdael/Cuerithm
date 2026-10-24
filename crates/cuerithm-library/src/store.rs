@@ -115,12 +115,14 @@ impl Library {
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         ensure!(
-            (0..=30).contains(&version),
+            (0..=31).contains(&version),
             "Library schema is newer than this application"
         );
         if version == 0 {
             let tables:i64=conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",[],|r|r.get(0))?;
             ensure!(tables == 0, "This is not a Cuerithm library");
+            // Must be set before the first table exists.
+            crate::lean::enable_incremental_vacuum(&conn)?;
             conn.execute_batch(&format!(
                 "BEGIN IMMEDIATE;\n{}\nCOMMIT;",
                 include_str!("../migrations/001_initial.sql")
@@ -299,6 +301,22 @@ impl Library {
                 include_str!("../migrations/030_library_import.sql")
             ))?;
         }
+        if version < 31 {
+            // The saved sync operations are converted first, while the records still hold the
+            // full copies their recorded digests were computed from.
+            conn.execute_batch("BEGIN IMMEDIATE")?;
+            let upgraded = crate::upgrade_operation_ledgers(&conn).and_then(|()| {
+                conn.execute_batch(include_str!("../migrations/031_lean_native_records.sql"))
+                    .map_err(Into::into)
+            });
+            match upgraded {
+                Ok(()) => conn.execute_batch("COMMIT")?,
+                Err(error) => {
+                    let _ = conn.execute_batch("ROLLBACK");
+                    return Err(error);
+                }
+            }
+        }
         #[cfg(not(feature = "autotag"))]
         {
             let pending: i64 = conn.query_row(
@@ -320,6 +338,7 @@ impl Library {
         conn.pragma_update(None, "foreign_keys", true)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "FULL")?;
+        crate::lean::configure_wal(&conn)?;
         conn.execute(
             "UPDATE jobs SET state='queued',stage='queued',error=NULL WHERE state='running'",
             [],
@@ -358,16 +377,30 @@ impl Library {
             lib.recover_cleanup_writes()?;
             lib.recover_duplicate_writes()?;
         }
-        lib.recover_unused_disposals()?;
         lib.recover_unused_removals()?;
         lib.recover_organization()?;
         #[cfg(feature = "autotag")]
         {
             lib.recover_metadata_edits()?;
             lib.recover_artifact_cleanup(100)?;
+            // Cleanup previews and Undo journals that earlier versions never trimmed.
+            let _ = lib.prune_cleanup();
         }
         lib.recover_curation()?;
         let _ = lib.cleanup_relocation_indexes();
+        // Saved scans, reviews and previews that earlier versions never trimmed.
+        let _ = lib.prune_saved_reports();
+        // Original audio that earlier versions kept after a write had settled.
+        let _ = lib.sweep_legacy_originals();
+        // The restore copies of syncs older than the ten kept for each DJ program.
+        let _ = lib.prune_rekordbox_sync_history();
+        let _ = lib.prune_dj_sync_history();
+        // Waveforms of bytes that have since changed, and scratch folders a crash left behind.
+        lib.trim_caches();
+        // A log left by a process that was killed can be as large as its last transaction,
+        // and an older library holds space that its earlier versions never gave back.
+        lib.reclaim_storage_when_worthwhile();
+        lib.checkpoint_wal_when_idle();
         Ok(lib)
     }
     pub fn exclusive_operation(&self) -> Result<LibraryOperationLease<'_>> {

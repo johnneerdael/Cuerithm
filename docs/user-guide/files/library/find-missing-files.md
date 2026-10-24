@@ -126,7 +126,7 @@ Use this when a file is gone for good, because you deleted it on purpose or lost
 
 Playlists lose the track and keep the order of the others. A track's cues, analysis history, tags and metadata are saved with the removal, so **Undo removal** can bring everything back, including the track's place in each playlist. The cached waveforms, fingerprints and analysis results built from the removed audio are deleted, unless another track has the same content, and so are saved scans that listed the track. The cover art stays until the saved records are dropped.
 
-CueRithm keeps the saved records of your last 10 removals. In CueRithm 0.1.17 or later, duplicate merges that [delete files](find-duplicates.md#delete) count toward the same 10. When an eleventh removal pushes the oldest one out, its history line stays but it can no longer be undone. To drop the saved records of a removal sooner, use **Discard saved records…** in [History & recovery](undo-maintenance.md#undo-repairs).
+CueRithm keeps the saved records of your last 10 removals. In CueRithm 0.1.17 or later, duplicate merges that [delete files](find-duplicates.md#delete) count toward the same 10, and with CueRithm 0.1.19 or later so do merges that only archive. When an eleventh removal pushes the oldest one out, its history line stays but it can no longer be undone. To drop the saved records of a removal sooner, use **Discard saved records…** in [History & recovery](undo-maintenance.md#undo-repairs).
 
 ## When a whole drive is missing { #drive }
 
@@ -155,7 +155,7 @@ Tick **Inspect audio decoding** before you scan to decode every present file wit
 - [Move or rename files without breaking the library](../move-files.md)
 - [I moved or renamed my files](../../help/troubleshooting/files-moved.md)
 - [Archive tracks you no longer play](../archive.md)
-- [Undo a merge or restore removed files](undo-maintenance.md)
+- [Undo a merge or put back removed files](undo-maintenance.md)
 - [Keep a folder like Beatport in your library automatically](../watch-folders.md)
 
 <!-- verified: apps/desktop/src/views/Relocation.tsx; MaintenanceBroken.tsx (scan options, selection, Remove from library preview and confirmations, Find moved files, labels and messages); MaintenanceHistory.tsx; missing-repair-api.ts; App.tsx; components/TrackTable.tsx; apps/desktop/src-tauri/src/relocation_commands.rs, missing_commands.rs; crates/cuerithm-library/src/maintenance/relocate.rs, missing.rs (preview rules, reasons, relink, undo, discard, covers), track_removal.rs, purge.rs, undo_window.rs; watch_moves.rs (when a move is followed); relink.rs; tests/relocation.rs, missing_repair.rs, watch_moves.rs, removal_engine.rs; maintenance/broken.rs. Historical 14-file example retained from the upstream demo-library guide; no new track data invented. -->

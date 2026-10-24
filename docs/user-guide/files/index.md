@@ -96,7 +96,7 @@ New to CueRithm? Do [Prepare your first tracks](../get-started/first-tracks.md).
 | Find tracks that are the same recording and keep one | [Find and merge duplicate tracks](library/find-duplicates.md) |
 | See which tracks have no file, a damaged file or a changed file | [Find missing, moved or broken files](library/find-missing-files.md) |
 | List music files that no track uses, and remove them | [Find and remove unused files](library/clean-up-unused-files.md) |
-| Take back a merge or a removal | [Undo a merge or restore removed files](library/undo-maintenance.md) |
+| Take back a merge or a removal | [Undo a merge or put back removed files](library/undo-maintenance.md) |
 | Save a dated copy of the library, or put one back | [Back up your library](library/back-up-library.md) · [Restore your library from a backup](library/restore-library.md) |
 | Find the library on disk or see what takes space | [Where CueRithm keeps your data](library/where-data-lives.md) |
 

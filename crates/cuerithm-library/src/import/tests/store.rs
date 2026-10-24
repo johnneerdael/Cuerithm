@@ -436,16 +436,19 @@ fn import_store_migrates_without_touching_rekordbox_state() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        30
+        31
     );
+    // The import migration touches no rekordbox row. The lean-library migration that follows it
+    // keeps a record's key and hash and drops the content of a table native playlist sync does
+    // not read back.
     assert_eq!(
         conn.query_row(
-            "SELECT json FROM native_records WHERE target_id='old'",
+            "SELECT json,hash FROM native_records WHERE target_id='old'",
             [],
-            |r| r.get::<_, String>(0)
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
         )
         .unwrap(),
-        "{\"Title\":\"local\"}"
+        (String::new(), "hash".to_owned())
     );
     assert_eq!(
         conn.query_row(
@@ -529,7 +532,7 @@ fn imported_observations_and_blobs_remain_part_of_a_valid_library_backup() {
     let backup = library
         .create_library_backup(&backups.path().join("bundle"))
         .unwrap();
-    assert_eq!(backup.schema, 30);
+    assert_eq!(backup.schema, 31);
     let database = rusqlite::Connection::open(backup.path.join("library.sqlite")).unwrap();
     assert_eq!(
         database

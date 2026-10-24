@@ -210,24 +210,56 @@ fn one_pending_cleanup_reserves_its_destination_and_watch_events() {
     assert_eq!(f.lib.jobs().unwrap().len(), 1);
 }
 #[test]
-fn backup_storage_counts_committed_metadata_originals() {
+fn a_committed_cleanup_keeps_no_copy_of_the_original_audio() {
     let f = Fixture::new(1);
     let service = f.service();
     let p = service
         .preview_cleanup(CleanupScope::AllReady, config())
         .unwrap();
-    service
+    let batch = service
         .apply_cleanup(&p.id, &[p.proposals[0].id.clone()])
         .unwrap();
     let storage = f.lib.tagging_storage().unwrap();
-    assert_eq!(storage.original_files, 1);
-    assert!(storage.original_bytes > 0);
+    assert_eq!((storage.original_files, storage.original_bytes), (0, 0));
+    assert_eq!(storage.pending_cleanup, 0);
+    let write: String = f
+        .lib
+        .conn()
+        .unwrap()
+        .query_row(
+            "SELECT id FROM cleanup_writes WHERE batch_id=?1",
+            [&batch.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let journal = journal::load(&f.lib, &write).unwrap();
+    assert!(
+        journal.files[0].backup.is_none(),
+        "the journal names no backup"
+    );
+    assert!(!journal.files[0].staged.parent().unwrap().exists());
+    // Nothing but the user's own file and the application's folders is left behind: no file in
+    // the cleanup folder holds audio.
+    let leftover: Vec<_> = walkdir::WalkDir::new(f.lib.data_dir().join("cleanup"))
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .collect();
+    assert!(leftover.is_empty(), "{leftover:?}");
+}
+
+/// Every tag field of a file, as the cleanup reads them.
+fn tags(f: &Fixture, path: &std::path::Path) -> cuerithm_cleanup::Metadata {
+    cuerithm_autotag::read_metadata(path, &f.rt.probe(path).unwrap()).unwrap()
+}
+fn tags_at(service: &CleanupService, path: &std::path::Path) -> cuerithm_cleanup::Metadata {
+    cuerithm_autotag::read_metadata(path, &service.runtime.probe(path).unwrap()).unwrap()
 }
 
 #[test]
 fn interrupted_undo_restores_the_applied_version_and_can_retry_undo() {
     let f = Fixture::new(1);
-    let original_bytes = std::fs::read(&f.paths[0]).unwrap();
+    let original_tags = tags(&f, &f.paths[0]);
     let service = f.service();
     let preview = service
         .preview_cleanup(CleanupScope::AllReady, config())
@@ -290,7 +322,8 @@ fn interrupted_undo_restores_the_applied_version_and_can_retry_undo() {
     let service = CleanupService::new(lib.clone(), rt);
     let retry = service.undo_cleanup(&batch.id).unwrap();
     assert_eq!(retry.applied, ids);
-    assert_eq!(std::fs::read(&paths[0]).unwrap(), original_bytes);
+    // Undo writes the recorded tag values back; it has no copy of the original file to restore.
+    assert_eq!(tags_at(&service, &paths[0]), original_tags);
     drop(service);
     drop(lib);
     drop(dir);
@@ -302,6 +335,8 @@ fn committed_publication_finishes_pending_temporary_cleanup_after_restart() {
     journal::publish(&f.lib, &write).unwrap();
     let j = journal::load(&f.lib, &write).unwrap();
     let file = &j.files[0];
+    // The private folder went with the write; recreate what an interrupted cleanup leaves.
+    std::fs::create_dir_all(file.staged.parent().unwrap()).unwrap();
     std::fs::copy(&file.target, &file.staged).unwrap();
     f.lib
         .conn()
@@ -451,7 +486,7 @@ fn custom_tag_and_metadata_edits_invalidate_preview_and_undo() {
     assert_eq!(f.lib.track(&f.ids[0]).unwrap().title, "Later library edit");
 }
 #[test]
-fn damaged_backup_rejects_undo_and_invalid_selections_do_not_write() {
+fn invalid_selections_do_not_write_and_a_later_file_edit_is_never_overwritten_by_undo() {
     let f = Fixture::new(1);
     let service = f.service();
     let preview = service
@@ -490,10 +525,130 @@ fn damaged_backup_rejects_undo_and_invalid_selections_do_not_write() {
         )
         .unwrap();
     let journal = journal::load(&f.lib, &write).unwrap();
-    std::fs::write(journal.files[0].backup.as_ref().unwrap(), b"damaged backup").unwrap();
+    assert!(
+        journal.files[0].backup.is_none(),
+        "no copy of the original is kept"
+    );
+    // A file changed by another program after the batch is never overwritten.
+    std::fs::write(&f.paths[0], b"edited by another program").unwrap();
     let after = file_sha256(&f.paths[0]).unwrap();
     let undo = service.undo_cleanup(&applied.id).unwrap();
-    assert_eq!(undo.failed.len(), 1);
     assert!(undo.applied.is_empty());
+    assert_eq!(undo.conflicted.len(), 1, "{undo:?}");
     assert_eq!(file_sha256(&f.paths[0]).unwrap(), after);
+}
+
+/// Inserts a settled applied batch with one committed write, as an earlier version left it:
+/// the original still on disk and named by the journal. `n` is its age rank.
+fn old_batch(f: &Fixture, n: i64, keep_original: bool) -> std::path::PathBuf {
+    let folder = f.lib.data_dir().join(format!("cleanup/cuerithm-tags-{n}"));
+    std::fs::create_dir_all(&folder).unwrap();
+    let original = folder.join("original.flac");
+    std::fs::write(&original, vec![9u8; 512]).unwrap();
+    let conn = f.lib.conn().unwrap();
+    conn.execute(
+        "INSERT INTO cleanup_batches VALUES(?1,NULL,NULL,'apply','complete',?2,?3)",
+        params![
+            format!("batch{n}"),
+            format!(
+                r#"{{"id":"batch{n}","applied":[],"unchanged":[],"conflicted":[],"failed":[]}}"#
+            ),
+            1000 + n
+        ],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO cleanup_writes(id,batch_id,track_id,proposal_id,before_hash,after_hash,payload_json,workspace,state,created,cleanup_complete)
+         VALUES(?1,?2,?3,'p','a','b','{}',?4,'committed',?5,1)",
+        params![
+            format!("write{n}"),
+            format!("batch{n}"),
+            f.ids[0],
+            path_bytes(&folder),
+            1000 + n
+        ],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO cleanup_write_files VALUES(?1,0,X'00',X'00',?2,'a','b',X'00',X'00')",
+        params![
+            format!("write{n}"),
+            if keep_original {
+                Some(path_bytes(&original))
+            } else {
+                None
+            }
+        ],
+    )
+    .unwrap();
+    original
+}
+
+#[test]
+fn only_the_newest_ten_applied_batches_keep_their_undo_and_the_rest_keep_their_history() {
+    let f = Fixture::new(1);
+    let originals: Vec<_> = (0..14).map(|n| old_batch(&f, n, true)).collect();
+    f.lib.prune_cleanup().unwrap();
+    let service = f.service();
+    let history = service.cleanup_history().unwrap();
+    assert_eq!(history.len(), 14, "history lines are never dropped");
+    // Newest first: the ten newest can still be undone.
+    let undoable: Vec<bool> = history.iter().map(|h| h.can_undo).collect();
+    assert_eq!(undoable[..10], [true; 10]);
+    assert_eq!(undoable[10..], [false; 4]);
+    for (n, original) in originals.iter().enumerate() {
+        assert_eq!(
+            original.exists(),
+            n >= 4,
+            "the original of batch {n} follows its journal"
+        );
+    }
+    // Running it again changes nothing.
+    f.lib.prune_cleanup().unwrap();
+    assert_eq!(
+        service
+            .cleanup_history()
+            .unwrap()
+            .iter()
+            .filter(|h| h.can_undo)
+            .count(),
+        10
+    );
+}
+
+#[test]
+fn only_the_newest_few_previews_stay() {
+    let f = Fixture::new(1);
+    let service = f.service();
+    let mut previews = vec![];
+    for _ in 0..5 {
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        previews.push(
+            service
+                .preview_cleanup(CleanupScope::AllReady, config())
+                .unwrap(),
+        );
+    }
+    let plans: i64 = f
+        .lib
+        .conn()
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM cleanup_plans", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(plans, 3);
+    assert!(
+        service
+            .apply_cleanup(&previews[0].id, &[previews[0].proposals[0].id.clone()])
+            .is_err(),
+        "an old preview is gone: preview again"
+    );
+    let newest = previews.last().unwrap();
+    assert_eq!(
+        service
+            .apply_cleanup(&newest.id, &[newest.proposals[0].id.clone()])
+            .unwrap()
+            .applied
+            .len(),
+        1
+    );
 }

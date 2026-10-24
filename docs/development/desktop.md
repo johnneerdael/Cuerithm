@@ -171,11 +171,13 @@ attention. Audio and external-cover files participate in the same preparation.
 The watcher recognizes in-flight owned hashes instead of treating tag writes as
 new incoming files. A build without tagging support refuses pending journals
 rather than skipping recovery. Committed publication workspaces retain recovery
-original backups under application data; allow storage for retained audio backups
-when processing a large library. Settings reports the current original-backup
-count and size. Preparation/cleanup originals are retained indefinitely; their
-retention cleanup control remains outstanding. Explicit disposal exists separately
-for reviewed unused-file-removal backups through the maintenance API. Redundant
+original backups under application data only until the write has settled; the copy
+is deleted when it commits or rolls back, so processing a large library needs room
+for the files in flight, not for the whole library. Settings reports the current
+original-backup count and size, which is zero when nothing is under way. Libraries
+from earlier versions lose the copies they kept (bounded per start; see
+`legacy_originals.rs`). Reviewed unused-file removal moves files to the Trash and keeps
+no copy. Redundant
 staged outputs are removed after successful completion
 or successful rollback. True no-op writes retain no duplicate audio. Persisted
 cleanup completion avoids rereading historical backups on every startup.

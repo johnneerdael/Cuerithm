@@ -77,6 +77,9 @@ pub(crate) fn start_shutdown(app: tauri::AppHandle, host: Arc<host::Host>) {
         }
         host.smart_playlists.shutdown();
         host.maintenance.wait_until_idle();
+        // Fold the write-ahead log into the library and truncate it, so a closed app leaves
+        // one database file behind. Best effort: the next start repeats it.
+        let _ = host.library.checkpoint_wal();
         if host
             .restart_requested
             .load(std::sync::atomic::Ordering::Acquire)
@@ -119,6 +122,15 @@ pub fn run() {
                 initial_folder,
                 &app.package_info().version.to_string(),
             )?);
+            // Finishes a removal of unused files that was interrupted on its way to the Trash,
+            // and moves the copies that earlier versions kept to the Trash too. Whatever cannot
+            // be done now is tried again at the next start.
+            {
+                let library = host.library.clone();
+                std::thread::spawn(move || {
+                    let _ = library.resume_unused_removals(&cuerithm_library::SystemTrash);
+                });
+            }
             let events = host.preparation.subscribe();
             let handle = app.handle().clone();
             std::thread::spawn(move || {
@@ -345,13 +357,8 @@ pub fn run() {
             maintenance_commands::maintenance_export_unused,
             maintenance_commands::maintenance_preview_unused_removal,
             maintenance_commands::maintenance_apply_unused_removal,
-            maintenance_commands::maintenance_restore_unused_removal,
             maintenance_commands::maintenance_unused_removal_history,
             maintenance_commands::maintenance_retry_unused_recovery,
-            maintenance_commands::maintenance_preview_backup_disposal,
-            maintenance_commands::maintenance_dispose_backups,
-            maintenance_commands::maintenance_backup_disposal_history,
-            maintenance_commands::maintenance_retry_backup_disposal,
             maintenance_commands::maintenance_begin_review,
             maintenance_commands::maintenance_get_review,
             maintenance_commands::maintenance_edit_review,

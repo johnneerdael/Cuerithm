@@ -112,17 +112,17 @@
   "after": "## Preview and remove { #remove }",
   "alt": "Review files to remove: the selected files with their sizes and the Remove reviewed files and Discard preview buttons",
   "caption": "The preview lists every file and folder that will go before you confirm.",
-  "state": "After ticking the three files and choosing Preview removal: the 'Review files to remove' section with the summary line, each file with 'Selected file · size', and both buttons. Do NOT press Remove reviewed files.",
+  "state": "After ticking the three files and choosing Preview removal: the 'Review files to remove' section with the summary line (the files move to the Trash or Recycle Bin, CueRithm keeps no copy), each file with 'Selected file · size', and both buttons. Recapture: the earlier picture shows the old summary line about retained originals. Do NOT press Remove reviewed files.",
   "crop": "panel",
   "needs": "Same spare folder as the scan scene."
  },
  {
   "scene": "library-history-file-removals",
   "page": "files/library/undo-maintenance.md",
-  "after": "## Restore files you removed { #restore-files }",
-  "alt": "History & recovery with one File removal entry, its Reviewed paths opened and the Restore files and Select retained originals controls",
-  "caption": "A removal keeps its retained originals so Restore files can put the files back.",
-  "state": "After one real removal of the spare files (then restoring them is optional): History & recovery tab, 'Unused-file removals and retained originals' section with one 'File removal · committed' entry, the Reviewed paths details expanded, the Select retained originals checkbox and the Restore files button.",
+  "after": "## Find files you removed as unused { #unused-removals }",
+  "alt": "History & recovery with one File removal entry, its Reviewed paths opened and the line saying the files were moved to the Trash",
+  "caption": "A removal lists where each file went; the files themselves are in the Trash.",
+  "state": "After one real removal of the spare files: History & recovery tab, 'Unused-file removals' section with one 'File removal · committed' entry, the line '3 files moved to the Trash', and the Reviewed paths details expanded. There is no Restore files button.",
   "crop": "panel",
   "needs": "One completed unused-file removal of the spare files from the previous scenes (apply it only after the preview scene is captured)."
  },
@@ -166,9 +166,9 @@
  {
   "scene": "library-settings-recovery-backups",
   "page": "files/library/where-data-lives.md",
-  "after": "## See how much space the originals use { #space }",
-  "alt": "Settings on the Automatic tagging page scrolled to the Recovery backups row, which shows the size and file count of the original-file backups",
-  "caption": "Recovery backups shows how much space the retained originals use.",
+  "after": "## See what CueRithm keeps for Undo { #space }",
+  "alt": "Settings on the Automatic tagging page scrolled to the Recovery backups row, which shows the size and file count of the copies of files being written",
+  "caption": "Recovery backups shows the copies held while a write is under way, normally none.",
   "state": "Sidebar: Settings, Automatic tagging page, scrolled so the 'Recovery backups' row with its '... MB · ... files' value is visible near the top.",
   "crop": "panel"
  },

@@ -1,11 +1,37 @@
-use cuerithm_library::{ExtensionMode, Library, UnusedRemovalRole, UnusedScanRequest};
+use cuerithm_library::{
+    ExtensionMode, FileTrash, Library, UnusedRemovalDisposal, UnusedRemovalPreview,
+    UnusedRemovalResult, UnusedRemovalRole, UnusedScanRequest,
+};
 use cuerithm_media::CancellationToken;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+/// A Trash that is a folder in the test's own temporary directory.
+struct Bin {
+    folder: PathBuf,
+    taken: Mutex<Vec<String>>,
+}
+impl Bin {
+    fn taken(&self) -> Vec<String> {
+        let mut names = self.taken.lock().unwrap().clone();
+        names.sort();
+        names
+    }
+}
+impl FileTrash for Bin {
+    fn move_to_trash(&self, path: &Path) -> Result<(), String> {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        std::fs::rename(path, self.folder.join(&name)).map_err(|e| e.to_string())?;
+        self.taken.lock().unwrap().push(name);
+        Ok(())
+    }
+}
 struct Fixture {
     dir: tempfile::TempDir,
     lib: Library,
     db: PathBuf,
     music: PathBuf,
+    bin: Bin,
 }
 impl Fixture {
     fn new() -> Self {
@@ -14,12 +40,30 @@ impl Fixture {
         std::fs::create_dir(&music).unwrap();
         let db = dir.path().join("app/db");
         let lib = Library::open(&db).unwrap();
+        let folder = dir.path().join("bin");
+        std::fs::create_dir(&folder).unwrap();
         Self {
             dir,
             lib,
             db,
             music,
+            bin: Bin {
+                folder,
+                taken: Mutex::default(),
+            },
         }
+    }
+    fn preview(
+        &self,
+        scan_id: &str,
+        selected: &[String],
+        token: &CancellationToken,
+    ) -> anyhow::Result<UnusedRemovalPreview> {
+        self.lib
+            .preview_unused_removal_with(scan_id, selected, &self.bin, token)
+    }
+    fn apply(&self, id: &str, token: &CancellationToken) -> anyhow::Result<UnusedRemovalResult> {
+        self.lib.apply_unused_removal_with(id, &self.bin, token)
     }
     fn file(&self, name: &str, bytes: &[u8]) -> PathBuf {
         let path = self.music.join(name);
@@ -78,8 +122,7 @@ fn preview_names_selected_files_and_only_the_first_lexicon_sibling_without_remov
     let scan = f.scan();
     assert_eq!(scan.files.len(), 1);
     let preview = f
-        .lib
-        .preview_unused_removal(
+        .preview(
             &scan.id,
             &[scan.files[0].id.clone()],
             &CancellationToken::default(),
@@ -98,7 +141,7 @@ fn preview_names_selected_files_and_only_the_first_lexicon_sibling_without_remov
     assert_eq!(f.state(), before);
 }
 #[test]
-fn reviewed_removal_and_restart_discovered_restore_preserve_library_state_and_exact_file_bytes() {
+fn a_reviewed_removal_moves_the_files_to_the_trash_leaves_the_library_alone_and_keeps_no_copy() {
     let mut f = Fixture::new();
     let source = f.file("nested/loose.flac", b"source bytes");
     let sibling = f.file("nested/loose.flac.vdjstems", b"stem bytes");
@@ -108,28 +151,35 @@ fn reviewed_removal_and_restart_discovered_restore_preserve_library_state_and_ex
     let scan = f.scan();
     let token = CancellationToken::default();
     let preview = f
-        .lib
-        .preview_unused_removal(&scan.id, &[scan.files[0].id.clone()], &token)
+        .preview(&scan.id, &[scan.files[0].id.clone()], &token)
         .unwrap();
-    let applied = f.lib.apply_unused_removal(&preview.id, &token).unwrap();
+    assert!(preview.files.iter().all(|file| !file.permanent));
+    let applied = f.apply(&preview.id, &token).unwrap();
     assert!(!source.exists() && !sibling.exists());
     assert_eq!(std::fs::read(&kept).unwrap(), b"live");
     assert_eq!(f.state(), before);
-    assert!(f.lib.apply_unused_removal(&preview.id, &token).is_err());
+    // The Trash has both files under their own names; nothing is kept in the data folder.
+    assert_eq!(f.bin.taken(), ["loose.flac", "loose.flac.vdjstems"]);
+    assert_eq!(
+        std::fs::read(f.bin.folder.join("loose.flac")).unwrap(),
+        b"source bytes"
+    );
+    assert!(
+        applied
+            .outcomes
+            .iter()
+            .all(|o| o.disposal == UnusedRemovalDisposal::Trashed)
+    );
+    assert!(!f.dir.path().join("app/maintenance/removal").exists());
+    assert!(f.apply(&preview.id, &token).is_err());
     drop(f.lib);
     f.lib = Library::open(&f.db).unwrap();
     let history = f.lib.unused_removal_history().unwrap();
     assert!(
         history
             .iter()
-            .any(|h| h.result.id == applied.id && h.state == "committed")
+            .any(|h| h.result.id == applied.id && h.state == "committed" && !h.cleanup_pending)
     );
-    let restored = f.lib.restore_unused_removal(&applied.id, &token).unwrap();
-    assert!(restored.restored);
-    assert_eq!(std::fs::read(&source).unwrap(), b"source bytes");
-    assert_eq!(std::fs::read(&sibling).unwrap(), b"stem bytes");
-    assert_eq!(f.state(), before);
-    assert!(f.lib.restore_unused_removal(&applied.id, &token).is_err());
     assert!(f.dir.path().exists());
 }
 
@@ -142,32 +192,25 @@ fn stale_and_partial_reports_unknown_ids_and_referenced_siblings_cannot_be_remov
     let token = CancellationToken::default();
     let scan = f.scan();
     assert!(
-        f.lib
-            .preview_unused_removal(&scan.id, &[scan.files[0].id.clone()], &token)
+        f.preview(&scan.id, &[scan.files[0].id.clone()], &token)
             .is_err()
     );
-    assert!(
-        f.lib
-            .preview_unused_removal(&scan.id, &["unknown".into()], &token)
-            .is_err()
-    );
-    assert!(f.lib.preview_unused_removal(&scan.id, &[], &token).is_err());
+    assert!(f.preview(&scan.id, &["unknown".into()], &token).is_err());
+    assert!(f.preview(&scan.id, &[], &token).is_err());
     assert!(a.exists() && sibling.exists());
     let f = Fixture::new();
     let path = f.file("loose.flac", b"source");
     let scan = f.scan();
     let preview = f
-        .lib
-        .preview_unused_removal(&scan.id, &[scan.files[0].id.clone()], &token)
+        .preview(&scan.id, &[scan.files[0].id.clone()], &token)
         .unwrap();
     std::fs::write(&path, b"later!").unwrap();
-    assert!(f.lib.apply_unused_removal(&preview.id, &token).is_err());
+    assert!(f.apply(&preview.id, &token).is_err());
     assert_eq!(std::fs::read(&path).unwrap(), b"later!");
     let conn = rusqlite::Connection::open(&f.db).unwrap();
     conn.execute("UPDATE maintenance_scans SET payload_json=json_set(payload_json,'$.report.complete',json('false')) WHERE id=?1",[&scan.id]).unwrap();
     assert!(
-        f.lib
-            .preview_unused_removal(&scan.id, &[scan.files[0].id.clone()], &token)
+        f.preview(&scan.id, &[scan.files[0].id.clone()], &token)
             .is_err()
     );
 }
@@ -180,8 +223,7 @@ fn later_library_references_and_same_content_replacements_invalidate_the_plan() 
         let token = CancellationToken::default();
         let scan = f.scan();
         let preview = f
-            .lib
-            .preview_unused_removal(&scan.id, &[scan.files[0].id.clone()], &token)
+            .preview(&scan.id, &[scan.files[0].id.clone()], &token)
             .unwrap();
         if replace {
             let newer = f.file("replacement", b"source");
@@ -190,7 +232,7 @@ fn later_library_references_and_same_content_replacements_invalidate_the_plan() 
         } else {
             f.add(&path);
         }
-        assert!(f.lib.apply_unused_removal(&preview.id, &token).is_err());
+        assert!(f.apply(&preview.id, &token).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"source");
     }
 }
@@ -203,14 +245,11 @@ fn sql_failure_and_cancellation_leave_all_sources_and_library_state_intact() {
     let token = CancellationToken::default();
     let scan = f.scan();
     let selected = scan.files.iter().map(|f| f.id.clone()).collect::<Vec<_>>();
-    let preview = f
-        .lib
-        .preview_unused_removal(&scan.id, &selected, &token)
-        .unwrap();
+    let preview = f.preview(&scan.id, &selected, &token).unwrap();
     let before = f.state();
     let conn = rusqlite::Connection::open(&f.db).unwrap();
     conn.execute_batch("CREATE TRIGGER fail_unused_commit BEFORE UPDATE ON maintenance_scans WHEN NEW.kind='unused_removal_operation' AND json_extract(NEW.payload_json,'$.state')='committed' BEGIN SELECT RAISE(ABORT,'injected unused commit failure'); END;").unwrap();
-    assert!(f.lib.apply_unused_removal(&preview.id, &token).is_err());
+    assert!(f.apply(&preview.id, &token).is_err());
     assert_eq!(std::fs::read(&a).unwrap(), b"first");
     assert_eq!(std::fs::read(&b).unwrap(), b"second");
     assert_eq!(f.state(), before);
@@ -218,29 +257,12 @@ fn sql_failure_and_cancellation_leave_all_sources_and_library_state_intact() {
         .unwrap();
     let cancelled = CancellationToken::default();
     cancelled.cancel();
-    assert!(f.lib.apply_unused_removal(&preview.id, &cancelled).is_err());
+    assert!(f.apply(&preview.id, &cancelled).is_err());
     assert!(a.exists() && b.exists());
-    let applied = f.lib.apply_unused_removal(&preview.id, &token).unwrap();
-    f.lib.restore_unused_removal(&applied.id, &token).unwrap();
-}
-
-#[test]
-fn restore_refuses_new_files_at_original_paths_and_remains_retryable() {
-    let f = Fixture::new();
-    let path = f.file("loose.flac", b"source");
-    let token = CancellationToken::default();
-    let scan = f.scan();
-    let preview = f
-        .lib
-        .preview_unused_removal(&scan.id, &[scan.files[0].id.clone()], &token)
-        .unwrap();
-    let applied = f.lib.apply_unused_removal(&preview.id, &token).unwrap();
-    std::fs::write(&path, b"new user file").unwrap();
-    assert!(f.lib.restore_unused_removal(&applied.id, &token).is_err());
-    assert_eq!(std::fs::read(&path).unwrap(), b"new user file");
-    std::fs::remove_file(&path).unwrap();
-    f.lib.restore_unused_removal(&applied.id, &token).unwrap();
-    assert_eq!(std::fs::read(&path).unwrap(), b"source");
+    let applied = f.apply(&preview.id, &token).unwrap();
+    assert_eq!(applied.outcomes.len(), 2);
+    assert!(!a.exists() && !b.exists());
+    assert_eq!(f.bin.taken(), ["a.flac", "b.flac"]);
 }
 
 #[cfg(unix)]
@@ -252,13 +274,12 @@ fn symlinked_parents_and_referenced_hardlink_aliases_are_never_removed() {
     let scan = f.scan();
     let token = CancellationToken::default();
     let preview = f
-        .lib
-        .preview_unused_removal(&scan.id, &[scan.files[0].id.clone()], &token)
+        .preview(&scan.id, &[scan.files[0].id.clone()], &token)
         .unwrap();
     let outside = f.dir.path().join("outside");
     std::fs::rename(f.music.join("nested"), &outside).unwrap();
     symlink(&outside, f.music.join("nested")).unwrap();
-    assert!(f.lib.apply_unused_removal(&preview.id, &token).is_err());
+    assert!(f.apply(&preview.id, &token).is_err());
     assert_eq!(std::fs::read(&path).unwrap(), b"source");
     let f = Fixture::new();
     let path = f.file("loose.flac", b"same");
@@ -266,40 +287,29 @@ fn symlinked_parents_and_referenced_hardlink_aliases_are_never_removed() {
     f.add(&reference);
     let scan = f.scan();
     let preview = f
-        .lib
-        .preview_unused_removal(&scan.id, &[scan.files[0].id.clone()], &token)
+        .preview(&scan.id, &[scan.files[0].id.clone()], &token)
         .unwrap();
     std::fs::remove_file(&path).unwrap();
     std::fs::hard_link(&reference, &path).unwrap();
-    assert!(f.lib.apply_unused_removal(&preview.id, &token).is_err());
+    assert!(f.apply(&preview.id, &token).is_err());
     assert!(path.exists() && reference.exists());
 }
 
 #[test]
-fn reviewed_empty_parent_and_metadata_are_removed_and_recreated_by_restore() {
-    let mut f = Fixture::new();
+fn reviewed_empty_parent_and_metadata_are_removed_with_the_files() {
+    let f = Fixture::new();
     let audio = f.file("album/loose.flac", b"authored audio");
     let metadata = f.file("album/.DS_Store", b"authored folder metadata");
     let keep = f.file("keep.txt", b"keep");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(
-            audio.parent().unwrap(),
-            std::fs::Permissions::from_mode(0o750),
-        )
-        .unwrap();
-    }
     let scan = f.scan();
     let token = CancellationToken::default();
     let plan = f
-        .lib
-        .preview_unused_removal(&scan.id, &[scan.files[0].id.clone()], &token)
+        .preview(&scan.id, &[scan.files[0].id.clone()], &token)
         .unwrap();
     assert_eq!(
         plan.files.len(),
         2,
-        "Folder metadata must be included in the review and backed up"
+        "Folder metadata must be included in the review"
     );
     assert_eq!(plan.directories.len(), 1);
     assert!(
@@ -308,30 +318,15 @@ fn reviewed_empty_parent_and_metadata_are_removed_and_recreated_by_restore() {
             .any(|p| p.role == UnusedRemovalRole::FolderMetadata)
     );
     assert!(audio.exists() && metadata.exists());
-    let applied = f.lib.apply_unused_removal(&plan.id, &token).unwrap();
+    f.apply(&plan.id, &token).unwrap();
     assert!(!audio.parent().unwrap().exists());
     assert!(f.music.exists());
-    drop(f.lib);
-    f.lib = Library::open(&f.db).unwrap();
-    f.lib.restore_unused_removal(&applied.id, &token).unwrap();
-    assert_eq!(std::fs::read(&audio).unwrap(), b"authored audio");
+    assert_eq!(f.bin.taken(), [".DS_Store", "loose.flac"]);
     assert_eq!(
-        std::fs::read(&metadata).unwrap(),
-        b"authored folder metadata"
+        std::fs::read(f.bin.folder.join("loose.flac")).unwrap(),
+        b"authored audio"
     );
     assert_eq!(std::fs::read(&keep).unwrap(), b"keep");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(
-            std::fs::metadata(audio.parent().unwrap())
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
-            0o750
-        );
-    }
 }
 #[test]
 fn folder_cleanup_keeps_source_sidecar_order_cover_art_and_the_reviewed_root() {
@@ -346,11 +341,10 @@ fn folder_cleanup_keeps_source_sidecar_order_cover_art_and_the_reviewed_root() {
         let scan = f.scan();
         let token = CancellationToken::default();
         let plan = f
-            .lib
-            .preview_unused_removal(&scan.id, &[scan.files[0].id.clone()], &token)
+            .preview(&scan.id, &[scan.files[0].id.clone()], &token)
             .unwrap();
         assert!(plan.directories.is_empty());
-        f.lib.apply_unused_removal(&plan.id, &token).unwrap();
+        f.apply(&plan.id, &token).unwrap();
         assert!(path.parent().unwrap().is_dir());
         assert_eq!(extra.exists(), !sidecar);
     }
@@ -359,15 +353,14 @@ fn folder_cleanup_keeps_source_sidecar_order_cover_art_and_the_reviewed_root() {
     let scan = f.scan();
     let token = CancellationToken::default();
     let plan = f
-        .lib
-        .preview_unused_removal(&scan.id, &[scan.files[0].id.clone()], &token)
+        .preview(&scan.id, &[scan.files[0].id.clone()], &token)
         .unwrap();
     assert!(plan.directories.is_empty());
-    f.lib.apply_unused_removal(&plan.id, &token).unwrap();
+    f.apply(&plan.id, &token).unwrap();
     assert!(f.music.is_dir());
 }
 #[test]
-fn selection_order_can_cleanup_nested_parents_and_restore_recreates_them_shallow_first() {
+fn selection_order_can_cleanup_nested_parents_deepest_first() {
     let f = Fixture::new();
     let child = f.file("album/sub/child.flac", b"child");
     let parent = f.file("album/parent.flac", b"parent");
@@ -384,16 +377,12 @@ fn selection_order_can_cleanup_nested_parents_and_restore_recreates_them_shallow
                 .clone()
         })
         .collect::<Vec<_>>();
-    let plan = f
-        .lib
-        .preview_unused_removal(&scan.id, &selected, &token)
-        .unwrap();
+    let plan = f.preview(&scan.id, &selected, &token).unwrap();
     assert_eq!(plan.directories.len(), 2);
-    let applied = f.lib.apply_unused_removal(&plan.id, &token).unwrap();
+    f.apply(&plan.id, &token).unwrap();
+    assert!(!child.parent().unwrap().exists());
     assert!(!parent.parent().unwrap().exists());
-    f.lib.restore_unused_removal(&applied.id, &token).unwrap();
-    assert_eq!(std::fs::read(&child).unwrap(), b"child");
-    assert_eq!(std::fs::read(&parent).unwrap(), b"parent");
+    assert_eq!(f.bin.taken(), ["child.flac", "parent.flac"]);
 }
 
 #[test]
@@ -462,8 +451,7 @@ fn extension_filters_do_not_make_associated_stems_eligible_for_unused_removal() 
             expected
         );
         let preview = f
-            .lib
-            .preview_unused_removal(
+            .preview(
                 &scan.id,
                 &scan
                     .files
@@ -474,7 +462,7 @@ fn extension_filters_do_not_make_associated_stems_eligible_for_unused_removal() 
             )
             .unwrap();
         assert_eq!(preview.files.len(), expected.len());
-        let applied = f.lib.apply_unused_removal(&preview.id, &token).unwrap();
+        f.apply(&preview.id, &token).unwrap();
         assert!(!orphan.exists());
         assert_eq!(
             orphan_serato.exists(),
@@ -489,11 +477,9 @@ fn extension_filters_do_not_make_associated_stems_eligible_for_unused_removal() 
             );
         }
         assert_eq!(f.state(), before);
-        f.lib.restore_unused_removal(&applied.id, &token).unwrap();
-        assert_eq!(std::fs::read(&orphan).unwrap(), b"orphan stem data");
         assert_eq!(
-            std::fs::read(&orphan_serato).unwrap(),
-            b"orphan Serato data"
+            std::fs::read(f.bin.folder.join("orphan.vdjstems")).unwrap(),
+            b"orphan stem data"
         );
     }
 }
@@ -516,12 +502,11 @@ fn an_excluded_base_added_after_review_blocks_orphan_sidecar_removal() {
         .unwrap();
     assert_eq!(scan.files.len(), 1);
     let preview = f
-        .lib
-        .preview_unused_removal(&scan.id, &[scan.files[0].id.clone()], &token)
+        .preview(&scan.id, &[scan.files[0].id.clone()], &token)
         .unwrap();
     let audio = f.file("late.flac", b"newly present excluded base audio");
     assert!(f.lib.unused_scan(&scan.id).unwrap().stale);
-    assert!(f.lib.apply_unused_removal(&preview.id, &token).is_err());
+    assert!(f.apply(&preview.id, &token).is_err());
     assert_eq!(std::fs::read(&stems).unwrap(), b"previously orphan stems");
     assert_eq!(
         std::fs::read(&audio).unwrap(),
@@ -536,8 +521,7 @@ fn saved_unused_scan_and_removal_plan_from_old_scanner_logic_cannot_be_applied()
     let token = CancellationToken::default();
     let scan = f.scan();
     let preview = f
-        .lib
-        .preview_unused_removal(&scan.id, &[scan.files[0].id.clone()], &token)
+        .preview(&scan.id, &[scan.files[0].id.clone()], &token)
         .unwrap();
     let conn = rusqlite::Connection::open(&f.db).unwrap();
     for id in [&scan.id, &preview.id] {
@@ -545,11 +529,10 @@ fn saved_unused_scan_and_removal_plan_from_old_scanner_logic_cannot_be_applied()
     }
     assert!(f.lib.unused_scan(&scan.id).unwrap().stale);
     assert!(
-        f.lib
-            .preview_unused_removal(&scan.id, &[scan.files[0].id.clone()], &token)
+        f.preview(&scan.id, &[scan.files[0].id.clone()], &token)
             .is_err()
     );
-    assert!(f.lib.apply_unused_removal(&preview.id, &token).is_err());
+    assert!(f.apply(&preview.id, &token).is_err());
     assert_eq!(std::fs::read(&audio).unwrap(), b"authored audio");
     assert!(f.lib.unused_removal_history().unwrap().is_empty());
 }

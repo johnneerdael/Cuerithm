@@ -501,7 +501,7 @@ fn all_schema_inputs_zero_through_five_migrate_without_touching_stored_analysis(
         assert_eq!(
             conn.query_row("pragma user_version", [], |r| r.get::<_, u32>(0))
                 .unwrap(),
-            30
+            31
         );
         if version > 0 {
             assert_eq!(

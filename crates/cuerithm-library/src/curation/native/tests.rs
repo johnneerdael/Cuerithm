@@ -880,6 +880,14 @@ fn inverse_blocked_before_any_file_write_can_be_discarded_without_adopting_chang
 fn library_backup_preserves_mapped_curation_history_and_native_undo() {
     let (temp, service, track, path, _) = fixture();
     let before = std::fs::read(&path).unwrap();
+    let tags = |service: &CurationService| {
+        cuerithm_autotag::read_metadata(
+            &path,
+            &service.runtime.as_ref().unwrap().probe(&path).unwrap(),
+        )
+        .unwrap()
+    };
+    let tags_before = tags(&service);
     service
         .library
         .conn()
@@ -916,7 +924,8 @@ fn library_backup_preserves_mapped_curation_history_and_native_undo() {
     service
         .undo(&publication.id, &CancellationToken::default())
         .unwrap();
-    assert_eq!(std::fs::read(&path).unwrap(), before);
+    // Undo writes the previous tag values back; it has no copy of the original bytes.
+    assert_eq!(tags(&service), tags_before);
     let state = service.snapshot(&[track]).unwrap().tracks.remove(0);
     assert!(state.committed.notes.is_empty());
 }

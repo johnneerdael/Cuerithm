@@ -11,6 +11,9 @@
 
 **Before you start:** pick one folder, not your whole Music folder. CueRithm compares every file in it with your library, so a narrow folder gives a short, readable list.
 
+!!! note "Which version"
+    Removed files go to the Trash or Recycle Bin, and CueRithm keeps no copy, from CueRithm 0.1.19 or later. Earlier versions deleted the files and kept a copy in the data folder for a **Restore files** button.
+
 ## Scan a folder { #scan }
 
 1. Choose **Maintenance** under TOOLS in the sidebar and open the **Unused files** tab.
@@ -56,10 +59,16 @@ Select **Export path list** to see the paths as plain text in a box titled *Path
 1. Tick **Select** beside each file you want to remove, or tick **Select all**. Nothing is selected for you.
 2. Select **Preview removal**. The section **Review files to remove** lists every file with its role (**Selected file**, **Associated sidecar** or **Folder metadata**) and size, and says how many files and how much space are involved.
 3. If removing the files would leave a folder empty, **Reviewed empty parent folders** lists it. A folder is removed only when nothing is left in it except `.DS_Store` or `Thumbs.db`. The folder you scanned always stays, and so does a folder that still holds anything else, such as cover art.
-4. Select **Remove reviewed files**. The message reads *Removal complete. 3 files removed with retained originals. Restore is in History & recovery.* **Discard preview** backs out.
+4. Select **Remove reviewed files**. The message reads, for example, *Removal complete. 3 of 3 files moved to the Trash.* **Discard preview** backs out.
 
-!!! danger "Removed files do not go to the Trash"
-    CueRithm deletes the files from your folder. Before it does, it keeps a verified copy of each one in its own data folder (see [Where CueRithm keeps your data](where-data-lives.md#what-is-in-the-folder)), which is what makes **Restore files** possible. Keep those copies until you are sure. See [Undo a merge or restore removed files](undo-maintenance.md#restore-files).
+The files go to the Trash on macOS and Linux and to the Recycle Bin on Windows, each under its own name, so you can put it back with the operating system (**Put Back** in the macOS Trash). CueRithm keeps no copy of them and has no **Restore** button for them. The record of the removal stays in [History & recovery](undo-maintenance.md#unused-removals).
+
+### Files that cannot go to the Trash { #permanent }
+
+Some places have no Trash: a network share, a read-only volume, a drive that the system does not keep a Trash on. The preview marks each file CueRithm expects the Trash to refuse with **Deleted permanently**, and a warning above the list says how many there are.
+
+!!! danger "A file marked Deleted permanently cannot be recovered"
+    CueRithm still tries the Trash first. Only a file the preview marked is ever deleted, and only after the Trash refused it. Any other file the Trash refuses stays where it was, and the message says so, for example *1 left where it was because the Trash refused it.* Discard the preview if you do not want a marked file deleted.
 
 Removal is refused when a report is out of date. Any change to the library, or to a file in the scan, marks it **Stale**, and **Select all** and **Preview removal** switch off. Scan again.
 
@@ -71,13 +80,14 @@ Removal is refused when a report is out of date. Any change to the library, or t
 | *Partial scan. Resolve the issues and scan again before removal.* | A folder or file could not be read | Fix access, then scan again |
 | *Library or maintenance inputs changed. Reload or rescan before removal.* | The library changed after the scan | Select **Scan folder** again |
 | A file you expect is not listed | A library track, even an archived one, uses it | Check **Archive**, or [find missing files](find-missing-files.md) |
-| A restore later says an original path is occupied | A newer file now sits there | Move that file, then restore |
+| *1 left where it was because the Trash refused it* | The system Trash could not take the file and the preview had not marked it | Nothing was deleted. Free the cause, for example reconnect the drive, then scan and remove again |
+| A removal shows *Cleanup pending* in History & recovery | CueRithm quit before every file reached the Trash | Start CueRithm again. It finishes the removal, or select **Retry file recovery** |
 
 ## Related
 
-- [Undo a merge or restore removed files](undo-maintenance.md)
+- [Undo a merge or put back removed files](undo-maintenance.md)
 - [Find and merge duplicate tracks](find-duplicates.md)
 - [Archive tracks you no longer play](../archive.md)
 - [Where CueRithm keeps your data](where-data-lives.md)
 
-<!-- verified: apps/desktop/src/views/MaintenanceUnused.tsx, Maintenance.tsx, MaintenanceShared.tsx; crates/cuerithm-library/src/maintenance/unused.rs (referenced by path and file identity, archived records included, protected roots and DJ folders, exclusions, sidecars), removal.rs (preview, backups in data folder, restore), removal/folders.rs (parent cleanup); docs/development/maintenance-api.md; legacy guides/maintenance.md re-checked. The 3 files / 41.2 MB values are placeholders for a real scene and must match the captured figure -->
+<!-- verified: apps/desktop/src/views/MaintenanceUnused.tsx, Maintenance.tsx, MaintenanceShared.tsx; crates/cuerithm-library/src/maintenance/unused.rs (referenced by path and file identity, archived records included, protected roots and DJ folders, exclusions, sidecars), removal.rs (preview with `permanent`, Trash, outcomes), removal/legacy.rs, removal/folders.rs (parent cleanup); docs/development/maintenance-api.md; legacy guides/maintenance.md re-checked. The 3 files / 41.2 MB values are placeholders for a real scene and must match the captured figure -->

@@ -41,7 +41,8 @@ without changing audio tags or track metadata. Review before/after fields and
 categorized tags, uncheck unwanted proposals and apply the remaining selection.
 Editing rules or scope discards the old preview.
 
-Apply updates file tags and Cuerithm together, with a durable original backup.
+Apply updates file tags and Cuerithm together, with a durable original backup that
+is kept only until the write has settled.
 It preserves full decoded PCM, key, BPM, beatgrid, track energy and existing cue
 history. It does not perform new musical analysis. Unrepresentable metadata,
 changed files or concurrent track edits are reported per track; other selected
@@ -51,14 +52,18 @@ tracks can still complete. Conflicted tracks need a fresh scan.
 
 Undo history survives restart, including outcome counts and expandable
 per-track conflict/failure messages. Track names are loaded when a report is
-opened; stable IDs remain visible if the track is unavailable. Undo restores the original file bytes and library
-metadata if the current post-apply identity still matches. Newer edits are
-preserved and reported as conflicts. Fully undone batches no longer offer Undo.
+opened; stable IDs remain visible if the track is unavailable. Undo restores the tag
+values recorded before the apply (not a copy of the audio) and the library metadata,
+if the current post-apply identity still matches; it writes them through the same
+checked write as the apply, so the audio stays what it is. Newer edits are preserved
+and reported as conflicts. Fully undone batches no longer offer Undo. Only the newest
+ten applied batches stay undoable (`REMOVAL_UNDO_LIMIT`); an older one keeps its
+history line and refuses Undo.
 Recovery runs before preparation workers start and preserves later user bytes.
 
-Settings shows retained recovery storage from both preparation and manual
-cleanup. Originals remain until a separate retention action is implemented;
-redundant staged files are cleaned after durable publication.
+Settings shows recovery storage from both preparation and manual cleanup. That is
+only the copies of writes that are still under way or waiting for cleanup; a settled
+write holds none. Redundant staged files are cleaned after durable publication.
 
 ## Validation boundary
 

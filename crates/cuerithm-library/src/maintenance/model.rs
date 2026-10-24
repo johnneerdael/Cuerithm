@@ -345,6 +345,31 @@ pub struct UnusedRemovalFile {
     pub size_bytes: u64,
     pub source_sha256: String,
     pub role: UnusedRemovalRole,
+    /// The Trash cannot take this file, so it is deleted permanently if the Trash refuses it.
+    /// Only a file the preview listed this way is ever deleted permanently.
+    #[serde(default)]
+    pub permanent: bool,
+}
+/// What happened to one file of a removal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnusedRemovalDisposal {
+    /// Moved to the Trash or Recycle Bin, where the user can put it back.
+    Trashed,
+    /// Deleted permanently because the preview said the Trash cannot take it.
+    Deleted,
+    /// The Trash refused it and the preview did not announce a permanent deletion: the file
+    /// is where it was.
+    LeftInPlace,
+    /// No longer where the removal put it when the work was resumed after an interruption.
+    Gone,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnusedRemovalOutcome {
+    pub id: String,
+    pub display_path: String,
+    pub disposal: UnusedRemovalDisposal,
+    pub reason: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnusedRemovalPreview {
@@ -367,10 +392,12 @@ pub struct UnusedRemovalResult {
     pub size_bytes: u64,
     pub restored: bool,
     pub undo_of: Option<String>,
+    /// What became of each file, once the removal has settled.
+    #[serde(default)]
+    pub outcomes: Vec<UnusedRemovalOutcome>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnusedRemovalHistory {
-    pub restore_available: bool,
     pub result: UnusedRemovalResult,
     pub state: String,
     pub error: Option<String>,
@@ -426,32 +453,4 @@ pub struct DuplicateRecovery {
     /// can be retried.
     #[serde(default)]
     pub files_moved: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UnusedBackupFile {
-    pub operation_id: String,
-    pub file_id: String,
-    pub display_source_path: String,
-    pub size_bytes: u64,
-    pub source_sha256: String,
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UnusedBackupPreview {
-    pub id: String,
-    pub operation_ids: Vec<String>,
-    pub files: Vec<UnusedBackupFile>,
-    pub size_bytes: u64,
-    pub restores_lost: Vec<String>,
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UnusedBackupDisposal {
-    pub id: String,
-    pub preview_id: String,
-    pub operation_ids: Vec<String>,
-    pub file_count: usize,
-    pub size_bytes: u64,
-    pub state: String,
-    pub cleanup_pending: bool,
-    pub error: Option<String>,
 }

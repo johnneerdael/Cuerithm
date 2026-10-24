@@ -13,7 +13,7 @@ const previewRow=(id:string,extra:Partial<MissingRow>={}):MissingRow=>({track_id
 const impact={playlists:[{id:"p",name:"Warm up",tracks:2}],playlist_memberships:2,sync_links:1,rekordbox_links:1,archived:1,unreachable:0};
 const entry=(kind:"remove"|"relink",extra:Partial<MissingRepairEntry>={}):MissingRepairEntry=>({id:"entry",kind,preview_id:"preview",created:1,undo_of:null,track_count:1,tracks:[{id:"gone-a",title:"Title gone-a",artist:"Artist",archived:false,display_path:"/Music/gone-a.flac",new_path:kind==="relink"?"/Moved/gone-a.flac":null}],skipped:[],playlist_ids:[],playlist_memberships:2,sync_links:1,rekordbox_links:1,stamp,...extra});
 function bridges(){
-  const api={onProgress:vi.fn(async()=>()=>{}),onChange:vi.fn(async()=>()=>{}),cancel:vi.fn(async()=>true),scanBroken:vi.fn(async()=>scan),brokenScan:vi.fn(async()=>scan),recovery:vi.fn(async()=>[]),mergeHistory:vi.fn(async()=>[]),unusedRemovalHistory:vi.fn(async()=>[]),backupDisposalHistory:vi.fn(async()=>[])} as unknown as MaintenanceBridge;
+  const api={onProgress:vi.fn(async()=>()=>{}),onChange:vi.fn(async()=>()=>{}),cancel:vi.fn(async()=>true),scanBroken:vi.fn(async()=>scan),brokenScan:vi.fn(async()=>scan),recovery:vi.fn(async()=>[]),mergeHistory:vi.fn(async()=>[]),unusedRemovalHistory:vi.fn(async()=>[])} as unknown as MaintenanceBridge;
   const removal=(ids:string[]):MissingPreview=>({id:"preview",kind:"remove",scan_id:"scan",created:1,rows:ids.map(id=>previewRow(id,id==="drive"?{file_state:"unavailable"}:{})),ready:ids.length,impact:{...impact,unreachable:ids.includes("drive")?1:0},locations:[],files_checked:0});
   const repair={
     previewRemoval:vi.fn(async(_op:string,_scan:string,ids:string[])=>removal(ids)),

@@ -548,6 +548,10 @@ impl Library {
         drop(conn);
         #[cfg(feature = "autotag")]
         let _ = self.cleanup_checkpoint_tags(&run.id);
+        // An Incoming save is finished here when an automatic Move followed it: only now can it
+        // count in the window of ten saves that can be undone.
+        #[cfg(feature = "autotag")]
+        let _ = self.prune_metadata_undo();
         Ok(true)
     }
 }

@@ -13,7 +13,7 @@
 **Before you start**, note that the measured key, BPM, energy and cues are separate and are not edited here.
 
 !!! warning "Saving writes into your music files"
-    CueRithm checks that the audio is unchanged and keeps the original as a recovery backup, but practise on a copy if you are new to this. A saved edit can be taken back with **Undo saved changes**; see [Undo a tag change](tag-history.md).
+    CueRithm checks that the audio is unchanged and records the values it replaced, but practise on a copy if you are new to this. A saved edit can be taken back with **Undo saved changes**; see [Undo a tag change](tag-history.md).
 
 ## 1. Select the tracks and open the editor { #open-the-editor }
 
@@ -79,7 +79,7 @@ If some selected MP3-style files still use ID3v2.3, a checkbox **Allow conversio
 
 ## What happens to the file { #what-happens }
 
-- **Finished track (Tracks):** the change is written now. CueRithm edits a staged copy, decodes it again to confirm the audio is identical, then swaps it in. The original stays as a recovery backup.
+- **Finished track (Tracks):** the change is written now. CueRithm edits a staged copy, decodes it again to confirm the audio is identical, then swaps it in. The values it replaced are recorded for **Undo saved changes**.
 - **Track still in Incoming:** the edit is queued and applied by preparation, and the result reads *Publication · queued*. The fields you changed are protected: automatic tagging does not replace them, and cleanup does not rewrite them, although it still tidies the fields you left alone.
 - Editing a finished track does not rename or move its file. Use [Rename and sort files into folders](../rename/organize-files.md) when you want that too.
 

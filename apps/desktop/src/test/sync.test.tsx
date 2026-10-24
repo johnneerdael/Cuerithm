@@ -415,6 +415,18 @@ describe("native DJ sync",()=>{
   expect(region.getByRole("button",{name:"Restore backup"})).toBeInTheDocument();
  });
 
+ it("lists a sync whose backup was removed without offering to restore it",async()=>{
+  const bridge=fakeBridge([]);
+  bridge.djSyncHistory=vi.fn(async()=>[
+   {id:"old",state:"applied" as const,target:prepared("old").target,tracks:1,playlists:0,created:1,error:null,needs_acknowledgement:false,needs_restore_acknowledgement:false,restore_expired:true},
+   {id:"new",state:"applied" as const,target:prepared("new").target,tracks:1,playlists:0,created:2,error:null,needs_acknowledgement:false,needs_restore_acknowledgement:false},
+  ]);
+  render(<Sync bridge={bridge} workspace={null} revision={1} onChanged={()=>{}}/>);
+  await screen.findByText(/The backup was removed after ten newer syncs of this program/);
+  const region=within(screen.getByRole("region",{name:"Sync history"}));
+  expect(region.getAllByRole("button",{name:"Restore backup"})).toHaveLength(1);
+ });
+
  it("keeps failed Prepared cleanup visible and retryable",async()=>{
   const bridge=fakeBridge([]);let remains=true;
   bridge.djSyncHistory=vi.fn(async()=>remains?[{id:"retry",state:"prepared" as const,target:null,tracks:0,playlists:0,created:null,error:null,needs_acknowledgement:false,needs_restore_acknowledgement:false}]:[]);

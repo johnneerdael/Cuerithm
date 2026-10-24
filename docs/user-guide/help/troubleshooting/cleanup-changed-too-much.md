@@ -15,7 +15,7 @@ Cleanup only edits human-readable metadata such as title, artist, album and genr
 | **Cleanup ran on its own.** | **Clean incoming tracks automatically** in **Settings** → **Cleanup** applies the saved rules to every new track after catalog tagging and before the track enters Tracks. |
 | **You applied every proposal without reading it.** | **Apply N changes** writes all ticked proposals, and all proposals start ticked. |
 
-Cleanup keeps the original file bytes (shown under **Recovery backups** in Settings). That is what makes undo possible.
+Cleanup records the tags it replaced. That is what makes undo possible.
 
 ## Fix it { #fix }
 

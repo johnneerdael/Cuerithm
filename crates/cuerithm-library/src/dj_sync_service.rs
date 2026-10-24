@@ -1,5 +1,8 @@
 //! Library ownership and acknowledgement around staged native DJ transactions.
 use crate::{DjSyncScope, Library};
+
+/// How many applied syncs of one target stay restorable.
+pub const RESTORE_LIMIT: usize = crate::REMOVAL_UNDO_LIMIT;
 use anyhow::{Context, Result, ensure};
 use cuerithm_dj_sync::{
     DjSoftware, SyncLibrary, SyncOptions, SyncPreview, SyncTarget,
@@ -43,6 +46,9 @@ pub struct DjSyncHistoryEntry {
     pub error: Option<String>,
     pub needs_acknowledgement: bool,
     pub needs_restore_acknowledgement: bool,
+    /// True once the sync is older than the ten kept for restore: its backup was removed.
+    #[serde(default)]
+    pub restore_expired: bool,
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Source {
@@ -78,6 +84,9 @@ struct LibraryJournal {
     restore_acknowledged: bool,
     #[serde(default)]
     preview_registration: String,
+    /// Set when the backup copies were removed because newer syncs of the target took their place.
+    #[serde(default)]
+    restore_expired: bool,
 }
 #[derive(Default, Serialize, Deserialize)]
 struct Baseline {
@@ -326,6 +335,7 @@ impl Library {
             ownership_restored: None,
             restore_acknowledged: false,
             preview_registration,
+            restore_expired: false,
         };
         saved.ownership_after = Some(saved.ownership_before.next(
             cuerithm_dj_sync::sync_ownership(&root, &preview.id)?,
@@ -495,7 +505,11 @@ impl Library {
             saved.acknowledged = true;
             Ok(journal)
         })();
-        finish(&transaction, &mut saved, result)
+        let outcome = finish(&transaction, &mut saved, result);
+        if outcome.is_ok() {
+            let _ = self.prune_dj_sync_locked(&root, RESTORE_LIMIT);
+        }
+        outcome
     }
 
     /// Restore verified backups, reconcile Serato's tag hashes, and invalidate
@@ -505,6 +519,12 @@ impl Library {
         let _lease = service_lock(&root)?;
         let transaction = FileTransaction::open(&root, id)?;
         let mut saved = read_library_journal(&transaction)?;
+        // A sync that has been restored needs no backup to finish or repeat its restore.
+        ensure!(
+            !saved.restore_expired || transaction.inspect()?.state == JournalState::Restored,
+            "This sync is older than the {} kept for restore, so its backup was removed",
+            RESTORE_LIMIT
+        );
         verify_target_selection(&saved)?;
         self.ensure_organization_references_settled(&saved.request.target)?;
         cuerithm_dj_sync::verify_sync_environment(&root, id)?;
@@ -579,7 +599,94 @@ impl Library {
             saved.restore_acknowledged = true;
             Ok(journal)
         })();
-        finish(&transaction, &mut saved, result)
+        let outcome = finish(&transaction, &mut saved, result);
+        if outcome.is_ok() {
+            let _ = self.prune_dj_sync_locked(&root, RESTORE_LIMIT);
+        }
+        outcome
+    }
+
+    /// Frees the backups of finished syncs beyond the newest ten of each target. Run when the
+    /// library opens; applying and restoring a sync do the same when they finish.
+    pub(crate) fn prune_dj_sync_history(&self) -> Result<u64> {
+        let root = self.data_dir().join("sync");
+        if !root.exists() {
+            return Ok(0);
+        }
+        let _lease = service_lock(&root)?;
+        self.prune_dj_sync_locked(&root, RESTORE_LIMIT)
+    }
+
+    /// The bound itself, with the service lock held. A restored sync can never be restored
+    /// again and gives up its copies at once; an applied one keeps them while it is among the
+    /// newest `limit` of its target. A sync that is not settled (not yet acknowledged) is never
+    /// touched.
+    fn prune_dj_sync_locked(&self, root: &Path, limit: usize) -> Result<u64> {
+        struct Finished {
+            id: String,
+            target: String,
+            created: i64,
+            restored: bool,
+            expired: bool,
+        }
+        let mut finished = vec![];
+        for entry in fs::read_dir(root)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let id = entry.file_name().to_string_lossy().into_owned();
+            if uuid::Uuid::parse_str(&id).is_ok_and(|parsed| parsed.to_string() == id) {
+                let Ok(transaction) = FileTransaction::open(root, &id) else {
+                    continue;
+                };
+                let (Ok(journal), Ok(saved)) =
+                    (transaction.inspect(), read_library_journal(&transaction))
+                else {
+                    continue;
+                };
+                let settled = match journal.state {
+                    JournalState::Applied => saved.acknowledged && saved.error.is_none(),
+                    JournalState::Restored => saved.restore_acknowledged,
+                    _ => false,
+                };
+                if settled {
+                    finished.push(Finished {
+                        target: digest(&saved.request.target)?,
+                        created: saved.created,
+                        restored: journal.state == JournalState::Restored,
+                        expired: saved.restore_expired,
+                        id,
+                    });
+                }
+            }
+        }
+        finished.sort_by(|a, b| b.created.cmp(&a.created).then_with(|| a.id.cmp(&b.id)));
+        let mut newest: BTreeMap<String, usize> = BTreeMap::new();
+        let (mut freed, mut handled) = (0, 0);
+        for item in finished {
+            let beyond = if item.restored {
+                true
+            } else {
+                let rank = newest.entry(item.target).or_default();
+                *rank += 1;
+                *rank > limit
+            };
+            if !beyond || item.expired || handled >= 50 {
+                continue;
+            }
+            handled += 1;
+            // One that cannot be cleaned now is tried again at the next pass.
+            let Ok(bytes) = FileTransaction::expire_payload(root, &item.id) else {
+                continue;
+            };
+            freed += bytes;
+            let transaction = FileTransaction::open(root, &item.id)?;
+            let mut saved = read_library_journal(&transaction)?;
+            saved.restore_expired = true;
+            atomic_json(&transaction.path().join("library.json"), &saved)?;
+        }
+        Ok(freed)
     }
 
     /// Include interrupted transactions and malformed journals in history instead
@@ -610,6 +717,7 @@ impl Library {
                 error: None,
                 needs_acknowledgement: false,
                 needs_restore_acknowledgement: false,
+                restore_expired: false,
             };
             match FileTransaction::open(&root, &id) {
                 Ok(transaction) => {
@@ -629,6 +737,7 @@ impl Library {
                             item.needs_restore_acknowledgement = item.state
                                 == Some(JournalState::Restored)
                                 && !saved.restore_acknowledged;
+                            item.restore_expired = saved.restore_expired;
                             item.created = Some(saved.created);
                             if saved.error.is_some() {
                                 item.error = saved.error;
@@ -1587,6 +1696,66 @@ mod tests {
                 .iter()
                 .any(|entry| entry.id == preview.id && entry.state == Some(JournalState::Restored))
         );
+    }
+    fn backup_files(root: &Path, id: &str) -> usize {
+        fs::read_dir(root.join(id).join("backup")).unwrap().count()
+    }
+    #[test]
+    fn only_the_newest_ten_syncs_of_a_target_keep_their_backups_and_a_restored_one_gives_its_up() {
+        let (_dir, library, target) = fixture();
+        let root = library.data_dir().join("sync");
+        let mut ids = vec![];
+        for round in 0..12 {
+            // A sync that changes nothing has nothing to back up: change the track each time.
+            library
+                .conn()
+                .unwrap()
+                .execute(
+                    "UPDATE tracks SET title=?1 WHERE id='a'",
+                    [format!("Authored {round}")],
+                )
+                .unwrap();
+            let preview = library
+                .preview_dj_sync(request(&target, DjSyncScope::Full))
+                .unwrap();
+            library.apply_dj_sync(&preview.id).unwrap();
+            ids.push(preview.id);
+            std::thread::sleep(std::time::Duration::from_millis(3));
+        }
+        // The two oldest gave up their copies as soon as the twelfth was applied.
+        for (index, id) in ids.iter().enumerate() {
+            assert_eq!(backup_files(&root, id) == 0, index < 2, "sync {index}");
+        }
+        let history = library.history_dj_sync().unwrap();
+        for (index, id) in ids.iter().enumerate() {
+            let entry = history.iter().find(|entry| &entry.id == id).unwrap();
+            assert_eq!(entry.restore_expired, index < 2);
+            // Every one is still listed, with its state.
+            assert_eq!(entry.state, Some(JournalState::Applied));
+        }
+        let error = library.restore_dj_sync(&ids[0]).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("older than the 10"),
+            "{error:#}"
+        );
+        // Pruning twice changes nothing more.
+        assert_eq!(library.prune_dj_sync_history().unwrap(), 0);
+        // The newest can be restored; once restored its copies are no longer needed.
+        assert_eq!(
+            library.restore_dj_sync(&ids[11]).unwrap().state,
+            JournalState::Restored
+        );
+        assert_eq!(backup_files(&root, &ids[11]), 0);
+        assert_ne!(backup_files(&root, &ids[10]), 0);
+        // A sync that has not been acknowledged may still need its backup, however old it is.
+        let path = root.join(&ids[2]).join("library.json");
+        let mut saved: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        saved["acknowledged"] = json!(false);
+        fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+        library.prune_dj_sync_locked(&root, 0).unwrap();
+        assert_ne!(backup_files(&root, &ids[2]), 0);
+        assert_eq!(backup_files(&root, &ids[3]), 0);
     }
     #[test]
     fn changed_metadata_is_selected_from_the_durable_target_baseline() {

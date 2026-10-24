@@ -273,31 +273,53 @@ fn rollback_with_authority_and_copy_hook(
     ensure!(errors.is_empty(), "{}", errors.join("; "));
     Ok(())
 }
-pub(crate) fn cleanup_temporaries(files: &[Artifact], root: &Path) -> Result<()> {
+/// Removes the private copies of a settled write, in the order that never leaves the user
+/// without a way back: the staged and displaced copies first (the displaced original is the live
+/// restore point until the write has committed), the backup of the original last and only when
+/// `retire_backup` says nothing will need it. A backup that an earlier pass already retired is
+/// not an error. A write that changed nothing never needed one.
+pub(crate) fn cleanup_temporaries(
+    files: &[Artifact],
+    root: &Path,
+    retire_backup: bool,
+) -> Result<()> {
     for file in files {
-        // Only the original recovery copy survives a changed publication. A
-        // no-op did not displace any source bytes and needs no audio backup.
-        if let Some(before) = &file.before
-            && before != &file.after
-        {
-            let backup = file
-                .backup
-                .as_ref()
-                .context("Missing durable original backup")?;
-            ensure!(
-                file_sha256(backup)? == *before,
-                "Original backup is unavailable; temporary recovery bytes retained"
-            );
-            // Also cover journals written by older versions before the explicit
-            // pre-journal durability barrier existed.
-            publish_files::durable_assets(
-                std::slice::from_ref(backup),
-                &backup
-                    .parent()
-                    .context("Missing backup workspace")?
-                    .canonicalize()?,
-                &root.canonicalize()?,
-            )?;
+        let changed = file
+            .before
+            .as_ref()
+            .is_some_and(|before| before != &file.after);
+        if changed {
+            match file.backup.as_ref() {
+                // While the original still exists only as the displaced file, the backup must
+                // be intact.
+                Some(backup) if backup.exists() || !retire_backup => {
+                    ensure!(
+                        file_sha256(backup)? == *file.before.as_ref().unwrap(),
+                        "Original backup is unavailable; temporary recovery bytes retained"
+                    );
+                    // Also cover journals written by older versions before the explicit
+                    // pre-journal durability barrier existed.
+                    publish_files::durable_assets(
+                        std::slice::from_ref(backup),
+                        &backup
+                            .parent()
+                            .context("Missing backup workspace")?
+                            .canonicalize()?,
+                        &root.canonicalize()?,
+                    )?;
+                }
+                // Retired by an earlier pass, which removes the displaced original first. If
+                // the original is still lying around, something else took the backup: keep it.
+                _ if retire_backup => {
+                    for path in [&file.publish, &file.displaced] {
+                        ensure!(
+                            current_hash(path)?.as_ref() != file.before.as_ref(),
+                            "Original backup is unavailable; temporary recovery bytes retained"
+                        );
+                    }
+                }
+                _ => anyhow::bail!("Missing durable original backup"),
+            }
         }
         let mut removed = std::collections::HashSet::new();
         for path in [&file.staged, &file.publish, &file.displaced] {
@@ -313,16 +335,22 @@ pub(crate) fn cleanup_temporaries(files: &[Artifact], root: &Path) -> Result<()>
                 publish_files::sync_parent(path)?;
             }
         }
-        if file.before.as_ref() == Some(&file.after)
+        if (!changed || retire_backup)
             && let Some(backup) = &file.backup
             && let Some(hash) = current_hash(backup)?
         {
             ensure!(
                 Some(&hash) == file.before.as_ref(),
-                "Changed no-op backup retained"
+                "Changed backup retained"
             );
             std::fs::remove_file(backup)?;
             publish_files::sync_parent(backup)?;
+            // The private folder goes with its last file.
+            if let Some(folder) = backup.parent()
+                && folder.canonicalize().ok() != root.canonicalize().ok()
+            {
+                let _ = std::fs::remove_dir(folder);
+            }
         }
     }
     Ok(())
@@ -531,7 +559,8 @@ mod tests {
             publish: displaced.clone(),
             displaced: displaced.clone(),
         };
-        assert!(cleanup_temporaries(&[artifact], d.path()).is_err());
+        assert!(cleanup_temporaries(std::slice::from_ref(&artifact), d.path(), true).is_err());
+        assert!(cleanup_temporaries(&[artifact], d.path(), false).is_err());
         assert_eq!(std::fs::read(displaced).unwrap(), b"original");
     }
 }

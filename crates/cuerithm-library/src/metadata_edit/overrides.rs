@@ -65,6 +65,130 @@ impl MetadataEditService {
 }
 
 impl Library {
+    /// The original audio an accepted Incoming save keeps is only read by its Undo, and only for
+    /// the pictures the save replaced or removed. Once the save has been written, those pictures
+    /// become artwork assets (artwork is part of the library) and the original is deleted. A
+    /// picture that cannot be kept leaves the original where it is: nothing is retired that Undo
+    /// would still need. Run after every tag write commits and when the library opens.
+    pub(crate) fn retire_incoming_originals(&self) -> Result<usize> {
+        let rows: Vec<(String, String)> = {
+            let conn = self.conn()?;
+            let mut query = conn.prepare(
+                "SELECT r.id,r.payload_json FROM metadata_edit_rows r
+                   JOIN metadata_edit_overrides o ON o.batch_id=r.batch_id AND o.track_id=r.track_id
+                  WHERE r.state='written' AND o.state IN ('committed','expired','undone')
+                    AND COALESCE(json_extract(r.payload_json,'$.original_retired'),0)=0
+                    AND json_type(r.payload_json,'$.stage.backup')='array'
+                  ORDER BY r.rowid LIMIT 50",
+            )?;
+            query
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<_>>()?
+        };
+        let save = |id: &str, row: &FrozenRow| -> Result<()> {
+            self.conn()?.execute(
+                "UPDATE metadata_edit_rows SET payload_json=?1 WHERE id=?2",
+                params![bounded_json(row)?, id],
+            )?;
+            Ok(())
+        };
+        let mut retired = 0;
+        'rows: for (id, text) in rows {
+            let mut row: FrozenRow = serde_json::from_str(&text)?;
+            let Some(stage) = row.stage.clone() else {
+                continue;
+            };
+            if row.kept_pictures.is_none() {
+                let mut kept = vec![];
+                if row.public.before.artwork != row.public.after.artwork {
+                    let backup = crate::model::bytes_path(&stage.backup)?;
+                    for picture in &row.public.before.artwork {
+                        let one = cuerithm_autotag::metadata_artwork_bytes(
+                            &backup,
+                            &stage.info,
+                            &picture.identity,
+                        )
+                        .and_then(|bytes| self.store_metadata_artwork(bytes));
+                        match one {
+                            Ok(asset) => kept.push(PreviousPicture {
+                                ordinal: picture.identity.ordinal,
+                                asset_id: asset.id,
+                            }),
+                            Err(_) => {
+                                for done in kept {
+                                    let _ = self.drop_metadata_artwork(&done.asset_id);
+                                }
+                                continue 'rows;
+                            }
+                        }
+                    }
+                }
+                row.kept_pictures = Some(kept);
+                save(&id, &row)?;
+            }
+            if super::previews::retire_stage_backup(self, &stage).is_err() {
+                continue;
+            }
+            row.original_retired = true;
+            save(&id, &row)?;
+            retired += 1;
+        }
+        Ok(retired)
+    }
+
+    /// An Incoming save can no longer be undone (it was undone, or `expire` says it left the
+    /// window of ten): the pictures kept for it go, and so does its original audio if that is
+    /// still there. With `expire` the save also stops being offered for Undo.
+    pub(crate) fn release_incoming_save(&self, job: &str, expire: bool) -> Result<()> {
+        // A save whose final proof is not recorded yet is still being finished (the worker has
+        // committed it, an automatic Move may follow): it keeps its original and pictures.
+        if expire {
+            let finished: bool = self.conn()?.query_row(
+                "SELECT EXISTS(SELECT 1 FROM metadata_edit_overrides WHERE job_id=?1 AND state='committed' AND undo_batch_id IS NULL AND final_json IS NOT NULL)",
+                [job],
+                |r| r.get(0),
+            )?;
+            if !finished {
+                return Ok(());
+            }
+        }
+        let row: Option<(String, String)> = self
+            .conn()?
+            .query_row(
+                "SELECT r.id,r.payload_json FROM metadata_edit_rows r
+                   JOIN metadata_edit_overrides o ON o.batch_id=r.batch_id AND o.track_id=r.track_id
+                  WHERE o.job_id=?1",
+                [job],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        if let Some((id, text)) = row {
+            let mut row: FrozenRow = serde_json::from_str(&text)?;
+            for picture in row.kept_pictures.take().into_iter().flatten() {
+                self.drop_metadata_artwork(&picture.asset_id)?;
+            }
+            // Nothing is left to keep; a later sweep only has the audio to retire.
+            row.kept_pictures = Some(vec![]);
+            if !row.original_retired
+                && let Some(stage) = row.stage.clone()
+                && super::previews::retire_stage_backup(self, &stage).is_ok()
+            {
+                row.original_retired = true;
+            }
+            self.conn()?.execute(
+                "UPDATE metadata_edit_rows SET payload_json=?1 WHERE id=?2",
+                params![bounded_json(&row)?, id],
+            )?;
+        }
+        if expire {
+            self.conn()?.execute(
+                "UPDATE metadata_edit_overrides SET state='expired',updated=?1 WHERE job_id=?2 AND state='committed' AND undo_batch_id IS NULL AND final_json IS NOT NULL",
+                params![now(), job],
+            )?;
+        }
+        Ok(())
+    }
+
     /// Project only retained Incoming originals; never decode historical snapshots.
     pub(crate) fn metadata_override_backup_paths_page(
         &self,
@@ -77,7 +201,7 @@ impl Library {
         );
         let paths = {
             let conn = self.conn()?;
-            let mut query=conn.prepare("SELECT json_extract(r.payload_json,'$.stage.backup') FROM metadata_edit_rows r WHERE r.state IN ('queued','written','superseded') AND json_extract(r.payload_json,'$.capture.public.state')='incoming' AND json_type(r.payload_json,'$.stage.backup')='array' AND EXISTS(SELECT 1 FROM metadata_edit_overrides o WHERE o.job_id=json_extract(r.payload_json,'$.capture.job') AND o.track_id=r.track_id) ORDER BY r.rowid LIMIT ?1 OFFSET ?2")?;
+            let mut query=conn.prepare("SELECT json_extract(r.payload_json,'$.stage.backup') FROM metadata_edit_rows r WHERE r.state IN ('queued','written','superseded') AND json_extract(r.payload_json,'$.capture.public.state')='incoming' AND COALESCE(json_extract(r.payload_json,'$.original_retired'),0)=0 AND json_type(r.payload_json,'$.stage.backup')='array' AND EXISTS(SELECT 1 FROM metadata_edit_overrides o WHERE o.job_id=json_extract(r.payload_json,'$.capture.job') AND o.track_id=r.track_id) ORDER BY r.rowid LIMIT ?1 OFFSET ?2")?;
             query
                 .query_map(params![limit, offset], |row| row.get::<_, String>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?

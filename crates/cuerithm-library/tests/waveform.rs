@@ -98,3 +98,48 @@ fn every_format_shares_waveform_seek_and_analysis_clock() {
         assert!(waveform(&audio, 0).is_err());
     }
 }
+
+#[test]
+fn a_waveform_read_from_the_cache_counts_as_used_so_trimming_keeps_it() {
+    let d = tempfile::tempdir().unwrap();
+    let archive = std::fs::File::open(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/fixtures/media.tar.gz"),
+    )
+    .unwrap();
+    tar::Archive::new(flate2::read::GzDecoder::new(archive))
+        .unpack(d.path())
+        .unwrap();
+    let cases: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(d.path().join("cases.json")).unwrap()).unwrap();
+    let root = std::env::var_os("CUERITHM_MEDIA_RUNTIME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/media-runtime/bin")
+        });
+    let rt = MediaRuntime::from_bundle(&root).unwrap();
+    let case = &cases.as_array().unwrap()[0];
+    let audio = rt
+        .decode(&d.path().join(case["file"].as_str().unwrap()), d.path())
+        .unwrap();
+    let cache = d.path().join("wave-cache");
+    cached_waveform(&audio, 240, &cache).unwrap();
+    let file = std::fs::read_dir(&cache)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let long_ago = std::time::SystemTime::now() - Duration::from_secs(30 * 24 * 3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(long_ago)
+        .unwrap();
+    cached_waveform(&audio, 240, &cache).unwrap();
+    let modified = std::fs::metadata(&file).unwrap().modified().unwrap();
+    assert!(
+        modified > long_ago + Duration::from_secs(24 * 3600),
+        "reading the cached waveform refreshes its time"
+    );
+}

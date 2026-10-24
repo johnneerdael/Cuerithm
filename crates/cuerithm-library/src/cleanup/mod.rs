@@ -168,15 +168,24 @@ impl CleanupService {
             "INSERT INTO cleanup_plans VALUES(?1,?2,?3)",
             params![public.id, serde_json::to_string(&plan)?, public.created],
         )?;
+        self.library.prune_cleanup()?;
         Ok(public)
     }
-    fn stage_proposal(&self, batch_id: &str, proposal: &Proposal) -> Result<String> {
-        let path = crate::model::bytes_path(&proposal.before.path)?;
+    /// Stages a copy of the file as it is now with `changes` written into its tags, checks it
+    /// and keeps the private workspace for the journal. Applying a cleanup and undoing one are
+    /// the same checked write: every change names the value it expects to replace, so a tag
+    /// that is no longer what the journal says is refused instead of overwritten.
+    fn stage_changes(
+        &self,
+        path: std::path::PathBuf,
+        source_sha256: &str,
+        changes: Vec<cuerithm_cleanup::FieldChange>,
+    ) -> Result<cuerithm_autotag::StagedTagWrite> {
         let cache = self.library.data_dir().join("cleanup");
         let audio = self.runtime.decode(&path, &cache)?;
         let input = cuerithm_autotag::TagInput {
             path,
-            source_sha256: proposal.before.source_sha256.clone(),
+            source_sha256: source_sha256.into(),
             media: audio.info.clone(),
             duration_seconds: audio.clock.duration_seconds(),
         };
@@ -189,10 +198,17 @@ impl CleanupService {
             attempted: vec![],
             warnings: vec![],
         };
-        let mut staged =
-            cuerithm_autotag::TagWritePlan::build(input, &outcome, &config, &Default::default())?
-                .with_metadata_edits(proposal.public.report.changes.clone())?
-                .stage_prepared(&self.runtime, &audio, &cache)?;
+        cuerithm_autotag::TagWritePlan::build(input, &outcome, &config, &Default::default())?
+            .with_metadata_edits(changes)?
+            .stage_prepared(&self.runtime, &audio, &cache)
+    }
+    fn stage_proposal(&self, batch_id: &str, proposal: &Proposal) -> Result<String> {
+        let path = crate::model::bytes_path(&proposal.before.path)?;
+        let mut staged = self.stage_changes(
+            path,
+            &proposal.before.source_sha256,
+            proposal.public.report.changes.clone(),
+        )?;
         let payload = journal::Payload {
             before: proposal.before.clone(),
             metadata: staged.metadata.clone(),
@@ -274,6 +290,7 @@ impl CleanupService {
             "UPDATE cleanup_batches SET state='complete',result_json=?1 WHERE id=?2",
             params![serde_json::to_string(&result)?, result.id],
         )?;
+        self.library.prune_cleanup()?;
         Ok(result)
     }
     fn undo_snapshot(&self, original: &journal::Journal) -> Result<Snapshot> {
@@ -300,6 +317,9 @@ impl CleanupService {
             identity: post.clone(),
         })
     }
+    /// Undo writes the tag values the journal recorded before the batch into the file as it is
+    /// now, through the same checked write as the batch itself. No copy of the original audio is
+    /// involved, so none has to be kept.
     fn stage_undo(
         &self,
         batch_id: &str,
@@ -307,92 +327,37 @@ impl CleanupService {
         original: &journal::Journal,
         before: &Snapshot,
     ) -> Result<String> {
-        let source = crate::model::bytes_path(&before.path)?;
-        let cache = self.library.data_dir().join("cleanup");
-        std::fs::create_dir_all(&cache)?;
-        let private = tempfile::Builder::new()
-            .prefix("cuerithm-undo-")
-            .tempdir_in(&cache)?;
-        let workspace = private.path().canonicalize()?;
-        let backup = workspace.join("original.audio");
-        let staged = workspace.join("staged.audio");
-        std::fs::copy(&source, &backup)?;
-        ensure!(
-            file_sha256(&backup)? == before.source_sha256,
-            "Source changed during Undo staging"
-        );
-        let restore = if before.source_sha256 == original.payload.before.source_sha256 {
-            source.clone()
-        } else {
-            let f = original.files.first().context("Missing cleanup artifact")?;
-            let backup = f.backup.as_ref().context("Missing original backup")?;
-            crate::artifacts::owned_file(
-                backup,
-                &original.workspace,
-                &original.payload.before.source_sha256,
-            )?;
-            backup.clone()
-        };
-        std::fs::copy(&restore, &staged)?;
-        let after = original.payload.before.source_sha256.clone();
-        ensure!(file_sha256(&staged)? == after, "Original backup changed");
-        let journal_id = uuid::Uuid::new_v4().to_string();
-        let parent = source.parent().context("Missing source folder")?;
-        let publish = parent.join(format!(".cuerithm-undo-{journal_id}.tmp"));
-        let displaced = if cfg!(windows) {
-            parent.join(format!(".cuerithm-undo-{journal_id}-before.tmp"))
-        } else {
-            publish.clone()
-        };
-        let files = vec![crate::artifacts::Artifact {
-            target: source,
-            staged,
-            backup: Some(backup),
-            before: Some(before.source_sha256.clone()),
-            after,
-            publish,
-            displaced,
-        }];
+        let changes: Vec<_> = original
+            .payload
+            .report
+            .changes
+            .iter()
+            .map(|c| cuerithm_cleanup::FieldChange {
+                field: c.field,
+                before: c.after.clone(),
+                after: c.before.clone(),
+            })
+            .collect();
+        let mut staged = self.stage_changes(
+            crate::model::bytes_path(&before.path)?,
+            &before.source_sha256,
+            changes.clone(),
+        )?;
         let report = cuerithm_cleanup::CleanupReport {
             original: before.metadata.clone(),
             metadata: original.payload.before.metadata.clone(),
-            changes: original
-                .payload
-                .report
-                .changes
-                .iter()
-                .map(|c| cuerithm_cleanup::FieldChange {
-                    field: c.field,
-                    before: c.after.clone(),
-                    after: c.before.clone(),
-                })
-                .collect(),
+            changes,
             applied_rules: vec!["undo".into()],
         };
-        let metadata = serde_json::from_str(
-            original.payload.before.row["row"]["metadata_json"]
-                .as_str()
-                .context("Missing original media metadata")?,
-        )?;
         let payload = journal::Payload {
             before: before.clone(),
-            metadata,
+            metadata: staged.metadata.clone(),
             report,
             post_identity: None,
             restore_row: Some(original.payload.before.row.clone()),
             undo_of: Some(original.id.clone()),
         };
-        journal::insert(
-            &self.library,
-            batch_id,
-            write,
-            &journal_id,
-            &payload,
-            &workspace,
-            &files,
-        )?;
-        let _ = private.keep();
-        Ok(journal_id)
+        journal::begin(&self.library, batch_id, write, &payload, &mut staged)
     }
     pub fn undo_cleanup(&self, batch_id: &str) -> Result<CleanupBatchResult> {
         let writes = {
@@ -487,6 +452,72 @@ impl CleanupService {
                 })
             })
             .collect()
+    }
+}
+
+/// How many cleanup previews stay: a preview holds a row of the library for every track it
+/// proposes a change to, and only the one the view shows is ever applied.
+const KEEP_PLANS: usize = 3;
+
+impl Library {
+    /// Bounds what cleanup keeps. Previews beyond the newest few go. Only the newest
+    /// `REMOVAL_UNDO_LIMIT` applied batches keep what Undo needs; an older batch keeps its history
+    /// line (what changed, how many tracks) and loses its Undo. Run when a preview or a batch is
+    /// saved and when the library opens, so a library from an earlier version is trimmed once.
+    pub(crate) fn prune_cleanup(&self) -> Result<()> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let old_plans: Vec<String> = tx
+            .prepare(
+                "SELECT id FROM cleanup_plans ORDER BY created DESC,rowid DESC LIMIT -1 OFFSET ?1",
+            )?
+            .query_map([KEEP_PLANS as i64], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        for id in old_plans {
+            tx.execute(
+                "UPDATE cleanup_batches SET plan_id=NULL WHERE plan_id=?1",
+                [&id],
+            )?;
+            tx.execute("DELETE FROM cleanup_plans WHERE id=?1", [&id])?;
+        }
+        // Applied batches that can still be undone, newest first; the rest lose their journals.
+        let expired: Vec<String> = tx
+            .prepare(
+                "SELECT b.id FROM cleanup_batches b
+                  WHERE b.kind='apply' AND EXISTS(SELECT 1 FROM cleanup_writes w WHERE w.batch_id=b.id AND w.state='committed')
+                  ORDER BY b.created DESC,b.rowid DESC LIMIT -1 OFFSET ?1",
+            )?
+            .query_map([crate::REMOVAL_UNDO_LIMIT as i64], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        let mut files = vec![];
+        for batch in expired {
+            // The journals of the batch and of every Undo made from it, once they have settled.
+            let writes: Vec<String> = tx
+                .prepare(
+                    "SELECT w.id FROM cleanup_writes w WHERE w.cleanup_complete=1 AND w.state IN ('committed','undone','rolled_back')
+                       AND (w.batch_id=?1 OR w.batch_id IN (SELECT id FROM cleanup_batches WHERE source_batch_id=?1))",
+                )?
+                .query_map([&batch], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            for write in writes {
+                for backup in tx
+                    .prepare("SELECT backup FROM cleanup_write_files WHERE write_id=?1 AND backup IS NOT NULL")?
+                    .query_map([&write], |r| r.get::<_, Vec<u8>>(0))?
+                {
+                    files.push(backup?);
+                }
+                tx.execute(
+                    "DELETE FROM cleanup_write_files WHERE write_id=?1",
+                    [&write],
+                )?;
+                tx.execute("DELETE FROM cleanup_writes WHERE id=?1", [&write])?;
+            }
+        }
+        tx.commit()?;
+        // A journal from an earlier version may still name an original; it goes with it.
+        drop(conn);
+        crate::legacy_originals::remove_owned_originals(self, "cleanup", &files);
+        Ok(())
     }
 }
 

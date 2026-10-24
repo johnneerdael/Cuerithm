@@ -50,7 +50,7 @@ pub(super) fn logic_identity() -> String {
         include_bytes!("unused.rs").as_slice(),
         include_bytes!("removal.rs").as_slice(),
         include_bytes!("removal/folders.rs").as_slice(),
-        include_bytes!("removal/retention.rs").as_slice(),
+        include_bytes!("removal/legacy.rs").as_slice(),
         include_bytes!("broken.rs").as_slice(),
         include_bytes!("review.rs").as_slice(),
         include_bytes!("merge.rs").as_slice(),
@@ -440,6 +440,11 @@ impl Library {
         if stamp(&tx)? != saved.report.stamp {
             mark_stale(&mut saved.report, "Library inputs changed during scan");
         }
+        // A new engine identity (every release has one) makes the old fingerprints useless.
+        tx.execute(
+            "DELETE FROM maintenance_fingerprints WHERE engine_identity!=?1",
+            [&saved.engine],
+        )?;
         for row in &saved.report.tracks {
             if let Some(fp) = &row.fingerprint {
                 tx.execute("INSERT INTO maintenance_fingerprints VALUES(?1,?2,?3,?4,?5) ON CONFLICT(track_id,engine_identity) DO UPDATE SET source_hash=excluded.source_hash,fingerprint_json=excluded.fingerprint_json,created=excluded.created",params![row.id,saved.engine,fp.source_sha256,serde_json::to_string(fp)?,saved.report.created])?;
@@ -454,6 +459,7 @@ impl Library {
                 saved.report.created
             ],
         )?;
+        super::saved::prune(&tx)?;
         tx.commit()?;
         Ok(saved.report)
     }

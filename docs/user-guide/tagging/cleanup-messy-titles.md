@@ -83,7 +83,7 @@ Press **Apply 5 changes**. CueRithm shows "Applying cleanup…" and then the **C
 </figure>
 <!-- /figure -->
 
-For each track CueRithm writes the new tags into a staged copy of the file, checks that the copy still decodes to the same audio and that the tags read back as intended, and only then swaps it in. The original file is kept as a recovery backup, and the track's title and genre in the library are updated at the same time. [How tags are written safely](../how-it-works/tag-writing.md) has the details.
+For each track CueRithm writes the new tags into a staged copy of the file, checks that the copy still decodes to the same audio and that the tags read back as intended, and only then swaps it in. The tags it replaced are recorded so the batch can be undone, and the track's title and genre in the library are updated at the same time. [How tags are written safely](../how-it-works/tag-writing.md) has the details.
 
 Switch to **Tracks**. The five titles no longer end in `(Original Mix)`. Key, BPM, energy and cues are unchanged, and a track that was playing keeps playing.
 
@@ -97,7 +97,7 @@ A second entry, **Undo**, appears, and the original titles and genre are back in
 
 - **Smart Fixes**, **Genres** and **Artists** are three tools that share one saved rule set.
 - A scan is a preview. Nothing is written until you press **Apply**, and you can untick any proposal first.
-- Apply writes the file tags and the library together, keeps the original file and leaves analysis and cues alone.
+- Apply writes the file tags and the library together, records the tags it replaced for Undo and leaves analysis and cues alone.
 - **Undo history** reverses a whole batch, track by track.
 
 ## Next steps

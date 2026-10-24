@@ -3,6 +3,26 @@ use crate::*;
 use cuerithm_dj_sync::import::*;
 use cuerithm_media::{CancellationToken, MediaRuntime};
 use serde_json::json;
+/// Undo writes the tags it recorded back; no copy of the file is kept, so the container's bytes
+/// may differ from the original. What has to come back is the audio and the tags.
+#[cfg(feature = "autotag")]
+fn assert_restored(dir: &std::path::Path, original: &[u8], now: &std::path::Path, label: &str) {
+    let extension = now.extension().unwrap().to_string_lossy().into_owned();
+    let copy = dir.join(format!("original-copy.{extension}"));
+    std::fs::write(&copy, original).unwrap();
+    let pcm = |path: &std::path::Path| {
+        runtime()
+            .decode(path, &dir.join("restored-cache"))
+            .unwrap()
+            .pcm_sha256()
+            .unwrap()
+    };
+    assert_eq!(pcm(now), pcm(&copy), "{label}: audio");
+    let tags = |path: &std::path::Path| {
+        cuerithm_autotag::read_metadata_snapshot(path, &runtime().probe(path).unwrap()).unwrap()
+    };
+    assert_eq!(tags(now), tags(&copy), "{label}: tags");
+}
 fn runtime() -> MediaRuntime {
     let bundle = std::env::var_os("CUERITHM_MEDIA_RUNTIME")
         .map(std::path::PathBuf::from)
@@ -1147,7 +1167,7 @@ fn accepted_imported_tags_write_without_provider_lookup() {
     f.lib
         .undo_import_operation(&op, &CancellationToken::default())
         .unwrap();
-    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_restored(f.root.path(), &before, &path, "undo");
 }
 #[cfg(feature = "autotag")]
 #[test]
@@ -1211,7 +1231,7 @@ fn raw_imported_key_is_written_and_used_for_file_naming() {
         .undo_import_operation(&op, &CancellationToken::default())
         .unwrap();
     assert_eq!(undo.blocked, 0, "{:?}", undo.errors);
-    assert_eq!(std::fs::read(path).unwrap(), before);
+    assert_restored(f.root.path(), &before, &path, "undo");
 }
 
 #[cfg(feature = "autotag")]
@@ -1265,7 +1285,7 @@ fn original_media_tag_preview_and_apply_require_the_source_app_closed() {
             .undone,
         1
     );
-    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_restored(f.root.path(), &before, &path, "undo");
 }
 #[cfg(feature = "autotag")]
 #[test]
@@ -1602,10 +1622,11 @@ fn selected_tag_write_preserves_pcm_and_undo_bytes_in_all_ten_formats() {
             .undo_import_operation(&op, &CancellationToken::default())
             .unwrap();
         assert_eq!(undo.blocked, 0, "{extension}/{codec}: {:?}", undo.errors);
-        assert_eq!(
-            std::fs::read(path).unwrap(),
-            original,
-            "{extension}/{codec}"
+        assert_restored(
+            f.root.path(),
+            &original,
+            &path,
+            &format!("{extension}/{codec}"),
         );
     }
 }
@@ -1709,7 +1730,9 @@ fn restart_recovers_a_linked_tag_journal_without_replaying_the_import() {
         .undo_import_operation(&op, &CancellationToken::default())
         .unwrap();
     assert_eq!(undo.blocked, 0, "{:?}", undo.errors);
-    assert_eq!(std::fs::read(path).unwrap(), original);
+    // Recovered, the save recorded its change like any other, so its Undo writes the previous
+    // tags back: the audio and tags return, the container's bytes need not.
+    assert_restored(f.root.path(), &original, &path, "undo after recovery");
 }
 #[cfg(feature = "autotag")]
 #[test]
@@ -1970,7 +1993,7 @@ fn restart_recovers_an_interrupted_native_tag_undo() {
         .undo_import_operation(&op, &CancellationToken::default())
         .unwrap();
     assert_eq!(result.blocked, 0, "{:?}", result.errors);
-    assert_eq!(std::fs::read(path).unwrap(), original);
+    assert_restored(f.root.path(), &original, &path, "interrupted undo");
     assert_eq!(
         f.lib
             .undo_import_operation(&op, &CancellationToken::default())
@@ -2092,7 +2115,7 @@ fn enrichment_names_the_final_track_with_or_without_a_tag_write() {
             .undo_import_operation(&op, &CancellationToken::default())
             .unwrap();
         assert_eq!(undo.blocked, 0, "{:?}", undo.errors);
-        assert_eq!(std::fs::read(path).unwrap(), original);
+        assert_restored(f.root.path(), &original, &path, "undo");
     }
 }
 #[cfg(feature = "autotag")]

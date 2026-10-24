@@ -95,6 +95,68 @@ fn retire_stage(library: &Library, stage: &StoredStage) -> Result<()> {
     )?;
     Ok(())
 }
+/// Deletes the original audio a settled save kept and, with it, the private folder. The staged
+/// copy has gone already. Nothing else in the folder is touched: an unknown entry keeps the
+/// folder.
+pub(super) fn retire_stage_backup(library: &Library, stage: &StoredStage) -> Result<()> {
+    let workspace = bytes_path(&stage.workspace)?;
+    ensure!(
+        workspace.starts_with(library.data_dir().canonicalize()?)
+            && stage.workspace_authority.path.path()? == workspace,
+        "Unowned metadata workspace"
+    );
+    match NativeParent::reopen(&stage.workspace_authority) {
+        Ok(_) => {}
+        Err(error)
+            if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
+    let backup = bytes_path(&stage.backup)?;
+    ensure!(
+        backup.parent() == Some(workspace.as_path()),
+        "Unowned metadata artifact path"
+    );
+    let owner = workspace
+        .file_name()
+        .context("Missing metadata workspace name")?
+        .to_str()
+        .context("Invalid private workspace name")?;
+    library.quarantine_artifact(
+        "metadata_original",
+        owner,
+        &backup,
+        &stage.workspace_authority,
+        &stage.backup_fingerprint,
+    )?;
+    if std::fs::read_dir(&workspace)?.next().is_some() {
+        // Something else is in the folder: leave it for the user's recovery tools to explain.
+        return Ok(());
+    }
+    let authority = crate::organization::Authority {
+        path: crate::organization::NativePath::new(
+            workspace
+                .parent()
+                .context("Missing metadata workspace parent")?,
+        ),
+        ancestors: stage.workspace_authority.ancestors
+            [..stage.workspace_authority.ancestors.len() - 1]
+            .to_vec(),
+    };
+    NativeParent::reopen(&authority)?.remove_private_directory(
+        std::path::Path::new(
+            workspace
+                .file_name()
+                .context("Missing metadata workspace name")?,
+        ),
+        &stage.workspace_authority,
+    )?;
+    Ok(())
+}
 impl Library {
     pub(crate) fn retire_unwritten_metadata_stages(&self, batch: &str) -> Result<()> {
         let _organization = self

@@ -228,7 +228,8 @@ fn unavailable_original_recovery_copy_blocks_backup_without_pruning_history() {
     let (d, lib, _) = fixture();
     let conn = Connection::open(lib.data_dir().join("library.sqlite")).unwrap();
     conn.execute("INSERT INTO maintenance_writes(id,kind,state,payload_json,created,cleanup_complete) VALUES('retained','apply','committed','{}',0,1)",[]).unwrap();
-    conn.execute("INSERT INTO maintenance_write_files(write_id,ordinal,target,staged,backup,before_hash,after_hash,publish_path,displaced_path,workspace) VALUES('retained',0,X'00',X'00',NULL,'before','after',X'00',X'00',X'00')",[]).unwrap();
+    // The journal names an original that is not there.
+    conn.execute("INSERT INTO maintenance_write_files(write_id,ordinal,target,staged,backup,before_hash,after_hash,publish_path,displaced_path,workspace) VALUES('retained',0,X'00',X'00',CAST('unix:/an-original-that-is-gone' AS BLOB),'before','after',X'00',X'00',X'00')",[]).unwrap();
     assert!(
         lib.create_library_backup(&d.path().join("backups"))
             .is_err()
@@ -238,6 +239,51 @@ fn unavailable_original_recovery_copy_blocks_backup_without_pruning_history() {
             .get::<_, i64>(0))
             .unwrap(),
         1
+    );
+}
+
+#[test]
+fn a_write_whose_original_was_retired_on_purpose_does_not_block_a_backup() {
+    let (d, lib, _) = fixture();
+    let conn = Connection::open(lib.data_dir().join("library.sqlite")).unwrap();
+    conn.execute("INSERT INTO maintenance_writes(id,kind,state,payload_json,created,cleanup_complete) VALUES('settled','apply','committed','{}',0,1)",[]).unwrap();
+    conn.execute("INSERT INTO maintenance_write_files(write_id,ordinal,target,staged,backup,before_hash,after_hash,publish_path,displaced_path,workspace) VALUES('settled',0,X'00',X'00',NULL,'before','after',X'00',X'00',X'00')",[]).unwrap();
+    lib.create_library_backup(&d.path().join("backups"))
+        .unwrap();
+}
+
+fn unused_removal_row(lib: &Library, id: &str, backup: &[u8]) {
+    let payload = serde_json::json!({
+        "state": "committed",
+        "undone_by": null,
+        "cleanup_complete": true,
+        "backups_disposed": false,
+        "files": [{
+            "backup": backup,
+            "entry": {"public": {"source_sha256": "f".repeat(64)}}
+        }]
+    });
+    Connection::open(lib.data_dir().join("library.sqlite"))
+        .unwrap()
+        .execute(
+            "INSERT INTO maintenance_scans VALUES(?1,'unused_removal_operation',?2,0)",
+            rusqlite::params![id, payload.to_string()],
+        )
+        .unwrap();
+}
+
+#[test]
+fn an_unused_file_removal_made_without_a_copy_does_not_block_a_backup_but_a_missing_copy_does() {
+    let (d, lib, _) = fixture();
+    // Removals since the library stopped keeping copies name none: the file is in the Trash.
+    unused_removal_row(&lib, "trashed", &[]);
+    lib.create_library_backup(&d.path().join("backups"))
+        .unwrap();
+    // An earlier version's removal still names its copy, which must be there and unchanged.
+    unused_removal_row(&lib, "older", b"unix:/a-copy-that-is-gone");
+    assert!(
+        lib.create_library_backup(&d.path().join("backups-2"))
+            .is_err()
     );
 }
 
@@ -450,7 +496,7 @@ fn settled_organization_with_owned_sidecars_remains_backed_up_and_restorable() {
         let backup = lib
             .create_library_backup(&d.path().join("backups"))
             .unwrap();
-        assert_eq!(backup.schema, 30);
+        assert_eq!(backup.schema, 31);
         assert_eq!(lib.inspect_library_backup(&backup.path).unwrap().tracks, 1);
         lib.stage_library_restore(&backup.path, &backup.database_sha256)
             .unwrap();
@@ -866,32 +912,21 @@ fn metadata_draft_artwork_history_and_undo_survive_same_installation_restore() {
 
 #[cfg(feature = "autotag")]
 #[test]
-fn metadata_backup_refuses_changed_retained_original_and_artwork() {
+fn metadata_backup_refuses_changed_retained_artwork_and_a_settled_save_keeps_no_original() {
     let (d, lib, _db, _runtime, _batch, _draft) = edited_metadata_fixture();
     let backup = lib
         .create_library_backup(&d.path().join("backups"))
         .unwrap();
     let conn = Connection::open(lib.data_dir().join("library.sqlite")).unwrap();
-    let encoded: Vec<u8> = conn
-        .query_row("SELECT backup FROM metadata_edit_files LIMIT 1", [], |r| {
-            r.get(0)
-        })
+    // A settled save deleted its original on purpose: nothing names one, and the folder is gone.
+    let named: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM metadata_edit_files WHERE backup IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
-    let original = cuerithm_library::organization::NativePath(encoded)
-        .path()
-        .unwrap();
-    let bytes = fs::read(&original).unwrap();
-    fs::write(&original, b"later external original edit").unwrap();
-    assert!(
-        lib.inspect_library_backup(&backup.path).is_err(),
-        "Undo originals are backup dependencies"
-    );
-    assert!(
-        lib.create_library_backup(&d.path().join("backups"))
-            .is_err(),
-        "changed retained originals cannot be blessed by a new backup"
-    );
-    fs::write(&original, bytes).unwrap();
+    assert_eq!(named, 0);
     let encoded: Vec<u8> = conn
         .query_row(
             "SELECT path FROM metadata_artwork_assets LIMIT 1",
@@ -910,13 +945,9 @@ fn metadata_backup_refuses_changed_retained_original_and_artwork() {
             .is_err()
     );
     fs::write(&asset, artwork_bytes).unwrap();
-    let replacement = original.with_extension("external-copy");
-    fs::copy(&original, &replacement).unwrap();
-    fs::rename(replacement, &original).unwrap();
     assert!(
-        lib.create_library_backup(&d.path().join("backups"))
-            .is_err(),
-        "Equal bytes cannot replace the saved native Undo original"
+        lib.create_library_backup(&d.path().join("backups")).is_ok(),
+        "restoring the bytes makes the artwork whole again"
     );
 }
 
@@ -995,7 +1026,7 @@ fn attention_job_metadata_and_review_outboxes_block_the_whole_restore_flow() {
 
 #[cfg(feature = "autotag")]
 #[test]
-fn metadata_restore_rechecks_retained_original_after_staging() {
+fn metadata_restore_rechecks_retained_artwork_after_staging() {
     let (d, lib, db, _runtime, _batch, _draft) = edited_metadata_fixture();
     let backup = lib
         .create_library_backup(&d.path().join("backups"))
@@ -1004,14 +1035,16 @@ fn metadata_restore_rechecks_retained_original_after_staging() {
         .unwrap();
     let conn = Connection::open(&db).unwrap();
     let encoded: Vec<u8> = conn
-        .query_row("SELECT backup FROM metadata_edit_files LIMIT 1", [], |r| {
-            r.get(0)
-        })
+        .query_row(
+            "SELECT path FROM metadata_artwork_assets LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
-    let original = cuerithm_library::organization::NativePath(encoded)
+    let asset = cuerithm_library::organization::NativePath(encoded)
         .path()
         .unwrap();
-    fs::write(&original, b"externally changed after staging").unwrap();
+    fs::write(&asset, b"externally changed after staging").unwrap();
     drop(conn);
     drop(lib);
     assert!(matches!(
@@ -1019,7 +1052,7 @@ fn metadata_restore_rechecks_retained_original_after_staging() {
         LibraryRestoreStartup::BlockedBeforeMutation { .. }
     ));
     assert_eq!(
-        fs::read(original).unwrap(),
+        fs::read(asset).unwrap(),
         b"externally changed after staging"
     );
 }
@@ -1216,7 +1249,7 @@ fn backup_restores_curate_presets_folder_assignments_and_library_catalog_state()
     let backup = lib
         .create_library_backup(&d.path().join("backups"))
         .unwrap();
-    assert_eq!(backup.schema, 30);
+    assert_eq!(backup.schema, 31);
     lib.save_preparation_preset(PreparationPresetSave {
         id: Some(preset.id.clone()),
         expected_revision: Some(preset.revision.clone()),

@@ -41,10 +41,10 @@ Begin with [Find and merge duplicate tracks](find-duplicates.md). It is the one 
 | Find tracks that are the same recording and keep one | [Find and merge duplicate tracks](find-duplicates.md) |
 | See which tracks have no file, a damaged file or a changed file | [Find missing, moved or broken files](find-missing-files.md) |
 | List music files in a folder that no track uses, and remove them | [Find and remove unused files](clean-up-unused-files.md) |
-| Take back a merge or a removal | [Undo a merge or restore removed files](undo-maintenance.md) |
+| Take back a merge or a removal | [Undo a merge or put back removed files](undo-maintenance.md) |
 | Clear out tracks whose files are gone, or reconnect files you moved | [Find missing, moved or broken files](find-missing-files.md) |
-| Retry an operation that was interrupted | [Undo a merge or restore removed files](undo-maintenance.md#recover) |
-| Free disk space taken by retained originals | [Undo a merge or restore removed files](undo-maintenance.md#dispose) |
+| Retry an operation that was interrupted | [Undo a merge or put back removed files](undo-maintenance.md#recover) |
+| See what CueRithm keeps for Undo and how much space it takes | [Where CueRithm keeps your data](where-data-lives.md#space) |
 | Save a dated copy of the library | [Back up your library](back-up-library.md) |
 | Restore a portable archive or import a supported Lexicon ZIP | [Restore your library from a backup](restore-library.md#inspect) |
 | Connect old music folders on another computer | [Connect music folders](restore-library.md#connect-folders) |
@@ -61,10 +61,10 @@ Begin with [Find and merge duplicate tracks](find-duplicates.md). It is the one 
 | **Duplicates** | Finds tracks that are the same recording, leaving out tracks whose file is not available | You choose per merge. **Archive only** archives the copies you do not keep and never touches a music file. **Delete from disk** moves verified identical copies to the Trash and removes their records. Both repoint playlists |
 | **Missing & broken** | Reports missing or unreadable files; **Remove from library…**, **Find moved files…** and **Find Lost Tracks** repair them | Removal deletes library records only, never audio. Reconnecting changes reviewed library references and survivor membership, without moving audio |
 | **Unused files** | Lists files in a folder that no track uses | Removes the files you select, after a preview, keeping a copy for Restore |
-| **History & recovery** | Undo, Restore and retry for the tools above | Reverses or finishes their changes |
+| **History & recovery** | Undo and retry for the tools above, and where removed unused files went | Reverses or finishes their changes |
 
 !!! note "Which version"
-    **Remove from library…**, **Find moved files…** and following moves inside a watch folder need CueRithm 0.1.15 or later. **Find Lost Tracks**, portable `.cuerithm` backups and restore need CueRithm 0.1.16 or later. **Delete from disk**, and leaving tracks whose file is not available out of Duplicates, need CueRithm 0.1.17 or later.
+    **Remove from library…**, **Find moved files…** and following moves inside a watch folder need CueRithm 0.1.15 or later. **Find Lost Tracks**, portable `.cuerithm` backups and restore need CueRithm 0.1.16 or later. **Delete from disk**, and leaving tracks whose file is not available out of Duplicates, need CueRithm 0.1.17 or later. Unused files that go to the Trash, and a limit of 10 for every merge, need CueRithm 0.1.19 or later.
 
 Relocation has its own **Previous relocations** list and guarded Undo in the [reconnection workspace](find-missing-files.md#undo-relocation). Portable replacement has [retained-library recovery](restore-library.md#go-back), rather than replaying old file-write Undo journals.
 

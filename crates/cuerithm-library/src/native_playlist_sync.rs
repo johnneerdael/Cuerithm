@@ -231,7 +231,7 @@ fn track_maps(
     conn: &Connection,
     target: &str,
 ) -> Result<(BTreeMap<String, String>, BTreeMap<String, String>)> {
-    let rows=conn.prepare("SELECT content_id,local_track_id,status FROM native_track_links WHERE target_id=?1 AND local_track_id IS NOT NULL AND observation_json IS NOT NULL")?.query_map([target],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let rows=conn.prepare("SELECT content_id,local_track_id,status FROM native_track_links WHERE target_id=?1 AND local_track_id IS NOT NULL AND observation_hash IS NOT NULL")?.query_map([target],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let mut remote = BTreeMap::new();
     let mut local = BTreeMap::new();
     for (content, track, status) in rows {

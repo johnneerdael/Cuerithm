@@ -596,7 +596,6 @@ fn mapped_curate_reuses_editor_publication_and_guards_native_undo() {
         &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/media-runtime/bin"),
     )
     .unwrap();
-    let original = std::fs::read(&path).unwrap();
     let pcm = runtime
         .decode(&path, library.data_dir())
         .unwrap()
@@ -695,7 +694,24 @@ fn mapped_curate_reuses_editor_publication_and_guards_native_undo() {
     service
         .undo(&publication.id, &CancellationToken::default())
         .unwrap();
-    assert_eq!(std::fs::read(&path).unwrap(), original);
+    // Undo writes the recorded tag values back; no copy of the original file is kept, so the
+    // bytes of the container may differ while the tags and the audio are what they were.
+    let restored =
+        cuerithm_autotag::read_metadata_snapshot(&path, &runtime.probe(&path).unwrap()).unwrap();
+    assert!(
+        restored
+            .text
+            .get(&cuerithm_autotag::MetadataTextField::Grouping)
+            .is_none_or(|values| values.is_empty())
+    );
+    assert_eq!(
+        runtime
+            .decode(&path, library.data_dir())
+            .unwrap()
+            .pcm_sha256()
+            .unwrap(),
+        pcm
+    );
     assert!(
         service.snapshot(&[track]).unwrap().tracks[0]
             .committed

@@ -107,7 +107,7 @@ CueRithm has tested direct rekordbox writes on macOS builds 6.8.7.0303 and 7.2.1
 
 - A watch folder turns new purchases into prepared tracks without further clicks.
 - Key, BPM and one whole-track energy rating are in the table; cues and the grid are in the player.
-- Cleanup and tagging preview first and keep the originals for Undo.
+- Cleanup and tagging preview first. Cleanup records the tags it replaces, so you can undo it.
 - A playlist stays in your library until you sync it, and sync is previewed, backed up and restorable.
 
 ## Next steps

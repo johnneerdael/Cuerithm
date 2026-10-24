@@ -312,9 +312,10 @@ fn database_failure_restores_file_and_previous_cue_state() {
 fn restoring_pre_tag_source_can_prepare_again_without_identity_collision() {
     let f = Fixture::new();
     let (run, mut staged, result) = f.prepare("New title");
+    let original = std::fs::read(&f.source).unwrap();
     let journal = f.lib.begin_tag_write(&run, &mut staged, &result).unwrap();
     f.lib.publish_preparation(&run, &journal).unwrap();
-    std::fs::copy(&staged.backup_path, &f.source).unwrap();
+    std::fs::write(&f.source, original).unwrap();
     let (again, mut second, result) = f.prepare("New title");
     let journal = f.lib.begin_tag_write(&again, &mut second, &result).unwrap();
     f.lib.publish_preparation(&again, &journal).unwrap();
@@ -429,7 +430,7 @@ fn schema_one_upgrades_without_dropping_existing_tables_or_metadata() {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 30);
+        assert_eq!(version, 31);
         let title: String = conn
             .query_row("SELECT title FROM tracks WHERE id='old'", [], |r| r.get(0))
             .unwrap();
@@ -466,14 +467,33 @@ fn assert_finished_stage_cleanup(fail: bool) {
         !staged.path.exists(),
         "redundant full staged audio must be removed"
     );
-    assert_eq!(file_sha256(&staged.backup_path).unwrap(), run.source_sha256);
-    let storage = f.lib.tagging_storage().unwrap();
-    assert_eq!(storage.original_files, 1);
-    assert_eq!(
-        storage.original_bytes,
-        std::fs::metadata(&staged.backup_path).unwrap().len()
+    // The original audio is kept only until the write has settled, rolled back or committed.
+    assert!(
+        !staged.backup_path.exists(),
+        "a settled write must not keep a copy of the original audio"
     );
+    assert!(
+        !staged.backup_path.parent().unwrap().exists(),
+        "the private folder goes with it"
+    );
+    let storage = f.lib.tagging_storage().unwrap();
+    assert_eq!((storage.original_files, storage.original_bytes), (0, 0));
     assert_eq!(storage.pending_cleanup, 0);
+    let retained: i64 = rusqlite::Connection::open(&f.db)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM tag_write_files WHERE write_id=?1 AND backup IS NOT NULL",
+            [&journal],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(retained, 0, "the journal no longer names a backup");
+    // The user's own file is the original or the tagged copy, never lost.
+    assert_eq!(
+        file_sha256(&f.source).unwrap() == run.source_sha256,
+        fail,
+        "a failed write left the original in place, a committed one the tagged file"
+    );
     let complete: bool = rusqlite::Connection::open(&f.db)
         .unwrap()
         .query_row(
@@ -733,4 +753,151 @@ fn solver_only_retry_keeps_prepared_and_tagging_journal_revisions() {
             "Accepted checkpoint title"
         );
     }
+}
+
+/// How the library stores a path.
+fn stored_path(path: &Path) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        [b"unix:".as_slice(), path.as_os_str().as_bytes()].concat()
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let mut out = b"windows:".to_vec();
+        for unit in path.as_os_str().encode_wide() {
+            out.extend(unit.to_le_bytes());
+        }
+        out
+    }
+}
+
+/// A committed write whose cleanup was interrupted after the backup went but before the journal
+/// said so is completed by the next start.
+#[test]
+fn cleanup_interrupted_after_the_backup_was_removed_completes_at_the_next_start() {
+    let f = Fixture::new();
+    let (run, mut staged, result) = f.prepare("New title");
+    let backup = staged.backup_path.clone();
+    let journal = f.lib.begin_tag_write(&run, &mut staged, &result).unwrap();
+    f.lib.publish_preparation(&run, &journal).unwrap();
+    assert!(!backup.exists());
+    let db = f.db.clone();
+    drop(f.lib);
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute(
+        "UPDATE tag_writes SET cleanup_complete=0 WHERE id=?1",
+        [&journal],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE tag_write_files SET backup=?1 WHERE write_id=?2 AND ordinal=0",
+        rusqlite::params![stored_path(&backup), journal],
+    )
+    .unwrap();
+    drop(conn);
+    let lib = Library::open(&db).unwrap();
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let (complete, named): (bool, i64) = conn
+        .query_row(
+            "SELECT w.cleanup_complete,(SELECT COUNT(*) FROM tag_write_files WHERE write_id=w.id AND backup IS NOT NULL) FROM tag_writes w WHERE w.id=?1",
+            [&journal],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert!(complete && named == 0, "complete={complete} named={named}");
+    assert_eq!(lib.tagging_storage().unwrap().pending_cleanup, 0);
+}
+
+/// While the displaced original is the only other copy, a damaged backup still stops the cleanup
+/// from retiring it.
+#[test]
+fn a_damaged_backup_still_stops_the_cleanup_while_the_original_is_displaced() {
+    let f = Fixture::new();
+    let (run, mut staged, result) = f.prepare("New title");
+    let backup = staged.backup_path.clone();
+    let journal = f.lib.begin_tag_write(&run, &mut staged, &result).unwrap();
+    std::fs::write(&backup, b"damaged original").unwrap();
+    // The damaged backup is caught before the file is published or retired.
+    assert!(f.lib.publish_preparation(&run, &journal).is_err());
+    assert_eq!(file_sha256(&f.source).unwrap(), run.source_sha256);
+    assert!(
+        backup.exists(),
+        "evidence is retained when it cannot be trusted"
+    );
+}
+
+/// The original audio that earlier versions kept is removed once, without touching anything
+/// outside the application's own private folders.
+#[test]
+fn originals_kept_by_earlier_versions_are_removed_once_and_nothing_else_is() {
+    let f = Fixture::new();
+    let (run, mut staged, result) = f.prepare("New title");
+    let journal = f.lib.begin_tag_write(&run, &mut staged, &result).unwrap();
+    f.lib.publish_preparation(&run, &journal).unwrap();
+    let (db, data) = (f.db.clone(), f.lib.data_dir().to_path_buf());
+    let legacy = data.join("tagging/cuerithm-tags-legacy/original.flac");
+    let bystander = f.source.parent().unwrap().join("music-of-the-user.flac");
+    std::fs::copy(&f.source, &bystander).unwrap();
+    drop(f.lib);
+    // Recreate what the earlier version left: the private folder with its original, named by
+    // the journal.
+    std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    std::fs::write(&legacy, vec![7u8; 4096]).unwrap();
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute(
+        "UPDATE tag_write_files SET backup=?1 WHERE write_id=?2 AND ordinal=0",
+        rusqlite::params![stored_path(&legacy), journal],
+    )
+    .unwrap();
+    // A second journal row points outside the data folder: it must never be followed.
+    conn.execute(
+        "INSERT INTO tag_write_files(write_id,ordinal,target,staged,backup,before_hash,after_hash,publish_path,displaced_path) SELECT write_id,7,target,staged,?1,before_hash,after_hash,publish_path,displaced_path FROM tag_write_files WHERE write_id=?2 AND ordinal=0",
+        rusqlite::params![stored_path(&bystander), journal],
+    )
+    .unwrap();
+    drop(conn);
+    let lib = Library::open(&db).unwrap();
+    assert!(!legacy.exists(), "the stale original is gone");
+    assert!(
+        !legacy.parent().unwrap().exists(),
+        "and so is its private folder"
+    );
+    assert!(
+        bystander.exists(),
+        "a file outside the data folder is never removed"
+    );
+    assert_eq!(lib.legacy_originals_removed().unwrap(), (1, 4096));
+    let still_named: Option<Vec<u8>> = rusqlite::Connection::open(&db)
+        .unwrap()
+        .query_row(
+            "SELECT backup FROM tag_write_files WHERE write_id=?1 AND ordinal=0",
+            [&journal],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        still_named.is_none(),
+        "the journal stops naming the deleted file"
+    );
+    // Only the file the made-up journal row names remains, and it is the user's.
+    assert_eq!(lib.tagging_storage().unwrap().original_files, 1);
+    drop(lib);
+    // Running it again changes nothing and counts nothing twice.
+    let lib = Library::open(&db).unwrap();
+    assert_eq!(lib.legacy_originals_removed().unwrap(), (1, 4096));
+    assert!(data.starts_with(f._dir.path().canonicalize().unwrap()));
+}
+
+/// The library backup used to refuse a library whose committed write had lost its retained
+/// original. A write whose cleanup retired the original on purpose does not block it.
+#[test]
+fn a_settled_write_does_not_block_a_library_backup() {
+    let f = Fixture::new();
+    let (run, mut staged, result) = f.prepare("New title");
+    let journal = f.lib.begin_tag_write(&run, &mut staged, &result).unwrap();
+    f.lib.publish_preparation(&run, &journal).unwrap();
+    let destination = f._dir.path().join("backups");
+    f.lib.create_library_backup(&destination).unwrap();
 }

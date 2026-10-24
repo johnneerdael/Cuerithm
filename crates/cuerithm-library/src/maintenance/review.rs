@@ -181,6 +181,7 @@ impl Library {
                 saved.review.created
             ],
         )?;
+        super::saved::prune(&tx)?;
         tx.commit()?;
         Ok(saved.review)
     }

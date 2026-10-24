@@ -650,6 +650,7 @@ impl Library {
         // left the Undo window go now.
         purge::cache_files(self.data_dir(), &orphans, &[]);
         purge::free_covers(self, &freed)?;
+        self.tidy_after_bulk_change();
         Ok(entry)
     }
 
@@ -1062,6 +1063,7 @@ impl Library {
         tx.commit()?;
         drop(conn);
         purge::free_covers(self, &covers)?;
+        self.tidy_after_bulk_change();
         Ok(MissingRepairHistory {
             entry: original.entry,
             undone_by: None,

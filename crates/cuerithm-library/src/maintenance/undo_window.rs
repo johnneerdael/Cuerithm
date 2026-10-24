@@ -1,8 +1,9 @@
-//! The one bound on how many removals can still be undone.
+//! The one bound on how many duplicate merges and removals can still be undone.
 //!
 //! Every removal of library records keeps a copy of those records for Undo, whether it
-//! came from a duplicate merge that deletes files or from Missing & broken. The newest
-//! `REMOVAL_UNDO_LIMIT` removals, counted together, keep their copy; older ones are final:
+//! came from a duplicate merge that deletes files or from Missing & broken, and every merge
+//! keeps the library state it changed. The newest `REMOVAL_UNDO_LIMIT` of them, counted
+//! together, keep their copy; older ones are final:
 //! the stored records are dropped, their history line stays without them, and Undo is no
 //! longer offered. That keeps the library from carrying the records of every track it ever
 //! lost. The cached covers a dropped removal was holding are returned so the caller can free
@@ -31,7 +32,7 @@ pub(super) fn enforce(conn: &Connection) -> Result<Vec<String>> {
                UNION ALL
                SELECT 'merge',id,created,rowid FROM maintenance_writes
                 WHERE kind='apply' AND state='committed'
-                  AND json_extract(payload_json,'$.removed') IS NOT NULL
+                  AND COALESCE(json_extract(payload_json,'$.undo_expired'),0)=0
              ) ORDER BY created DESC,seq DESC LIMIT -1 OFFSET ?1",
         )?
         .query_map([REMOVAL_UNDO_LIMIT as i64], |r| Ok((r.get(0)?, r.get(1)?)))?

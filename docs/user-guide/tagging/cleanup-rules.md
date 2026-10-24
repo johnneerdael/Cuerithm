@@ -244,7 +244,7 @@ Mappings, **Protected artists, one per line** and the library list work as they 
 | Category choices (genre conversion) | Not touched | Added, in the library only | Restored |
 | Audio, key, BPM, beatgrid, energy, cues | Not touched | Not touched | Not touched |
 
-- For each track, CueRithm writes the new tags into a staged copy of the file, decodes the copy to confirm the audio is identical, reads the tags back, and only then swaps the copy in. The original is kept as a recovery backup; its size appears under **Settings → Automatic tagging → Recovery backups**. There is no retention setting yet, so backups stay.
+- For each track, CueRithm writes the new tags into a staged copy of the file, decodes the copy to confirm the audio is identical, reads the tags back, and only then swaps the copy in. The tags it replaced are recorded for **Undo**, and a copy of the file is kept only while the write is under way (**Settings → Automatic tagging → Recovery backups** shows it).
 - The library is updated in the same step: title, artist, album and genre, and any categorised tags.
 - The audio, key, BPM, beatgrid, energy and existing cues are preserved. Apply does no new analysis.
 - A file whose tags would not change is not rewritten. A change that only adds category choices touches no file at all.

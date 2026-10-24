@@ -212,7 +212,7 @@ fn schema(conn: &Connection) -> Result<i64> {
     ensure!(app == APPLICATION_ID, "This is not a CueRithm library");
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     ensure!(
-        (27..=30).contains(&version),
+        (27..=31).contains(&version),
         "Unsupported library backup schema"
     );
     Ok(version)
@@ -265,9 +265,12 @@ pub(crate) fn quiet_database(conn: &Connection) -> Result<()> {
     );
     Ok(())
 }
+/// The write kinds that delete their original once they have settled.
+const RETIRING_BACKUPS: [&str; 3] = ["tag", "cleanup", "maintenance"];
 fn settled(conn: &Connection, root: &Path) -> Result<()> {
     quiet_database(conn)?;
-    // Every changed committed publication keeps its original bytes for recovery/Undo.
+    // A changed committed publication keeps its original bytes for recovery or Undo until its
+    // cleanup retires them, which clears the path from the journal.
     for table in ["tag", "cleanup", "maintenance"] {
         let query = format!(
             "SELECT f.backup,f.before_hash FROM {table}_write_files f JOIN {table}_writes w ON w.id=f.write_id WHERE w.state='committed' AND f.before_hash IS NOT NULL AND f.before_hash<>f.after_hash"
@@ -277,7 +280,15 @@ fn settled(conn: &Connection, root: &Path) -> Result<()> {
             Ok((r.get::<_, Option<Vec<u8>>>(0)?, r.get::<_, String>(1)?))
         })? {
             let (path, hash) = row?;
-            let path = bytes_path(&path.context("Recovery backup path is missing")?)?;
+            let Some(path) = path else {
+                // Retired: the write has settled and its original was deleted on purpose.
+                ensure!(
+                    RETIRING_BACKUPS.contains(&table),
+                    "Recovery backup path is missing"
+                );
+                continue;
+            };
+            let path = bytes_path(&path)?;
             let observed = location(&path)?;
             ensure!(
                 observed.sha256.as_deref() == Some(hash.as_str()),
@@ -294,6 +305,11 @@ fn settled(conn: &Connection, root: &Path) -> Result<()> {
         {
             for entry in op["files"].as_array().context("Invalid removal journal")? {
                 let bytes: Vec<u8> = serde_json::from_value(entry["backup"].clone())?;
+                if bytes.is_empty() {
+                    // A removal made since the library stopped keeping copies: the file went
+                    // to the Trash and there is nothing here to be missing or changed.
+                    continue;
+                }
                 let saved = entry["entry"]["public"]["source_sha256"]
                     .as_str()
                     .context("Invalid removal recovery identity")?;
@@ -704,6 +720,7 @@ fn metadata_stage(
     root: &Path,
     json: &str,
     staged_required: bool,
+    backup_required: bool,
 ) -> Result<()> {
     let stage: BackupMetadataStage = serde_json::from_str(json)?;
     let workspace = bytes_path(&stage.workspace)?;
@@ -715,7 +732,7 @@ fn metadata_stage(
         "Invalid retained metadata workspace or recovery identity"
     );
     for (path, proof, required) in [
-        (&stage.backup, &stage.backup_fingerprint, true),
+        (&stage.backup, &stage.backup_fingerprint, backup_required),
         (&stage.path, &stage.staged_fingerprint, staged_required),
     ] {
         let path = bytes_path(path)?;
@@ -723,6 +740,10 @@ fn metadata_stage(
             path.parent() == Some(workspace.as_path()),
             "Metadata recovery file leaves its workspace"
         );
+        if !required && !backup_required && path == bytes_path(&stage.backup)? {
+            // The save settled and deleted its original on purpose.
+            continue;
+        }
         if required {
             required_organization_file(locations, &path, &stage.workspace_authority, proof, true)?;
         } else {
@@ -761,22 +782,28 @@ fn metadata_inventory(
     }
     // Every physical committed/undone write retains an original with native
     // ownership proof. Failed pre-publication writes keep stage evidence too.
-    let mut query = conn.prepare("SELECT json_extract(payload_json,'$.row.stage'),state FROM metadata_edit_writes ORDER BY id")?;
+    let mut query = conn.prepare("SELECT json_extract(payload_json,'$.row.stage'),state,COALESCE(json_extract(payload_json,'$.backup_retired'),0) FROM metadata_edit_writes ORDER BY id")?;
     for row in query.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, bool>(2)?,
+        ))
     })? {
-        let (stage, state) = row?;
-        metadata_stage(locations, root, &stage, state == "failed")?;
+        let (stage, state, retired) = row?;
+        metadata_stage(locations, root, &stage, state == "failed", !retired)?;
     }
     // Incoming overrides have no physical metadata_edit_write. Their original
-    // is retained in the frozen row for inverse artwork and comment edits.
-    let mut query = conn.prepare("SELECT json_extract(r.payload_json,'$.stage') FROM metadata_edit_rows r JOIN metadata_edit_overrides o ON o.batch_id=r.batch_id AND o.track_id=r.track_id WHERE r.state='written' AND o.state='committed' AND json_type(r.payload_json,'$.stage')='object' ORDER BY r.id")?;
+    // is retained in the frozen row for inverse artwork and comment edits. A save that was
+    // undone or left the Undo window deletes it too, and until that has happened (a failed
+    // delete is retried by a sweep) the file is still on disk and still bound here.
+    let mut query = conn.prepare("SELECT json_extract(r.payload_json,'$.stage') FROM metadata_edit_rows r JOIN metadata_edit_overrides o ON o.batch_id=r.batch_id AND o.track_id=r.track_id WHERE r.state='written' AND o.state IN ('committed','expired','undone') AND COALESCE(json_extract(r.payload_json,'$.original_retired'),0)=0 AND json_type(r.payload_json,'$.stage')='object' ORDER BY r.id")?;
     for row in query.query_map([], |row| row.get::<_, String>(0))? {
-        metadata_stage(locations, root, &row?, false)?;
+        metadata_stage(locations, root, &row?, false, true)?;
     }
     let mut query = conn.prepare("SELECT json_extract(row.value,'$.stage') FROM metadata_edit_previews p,json_each(p.payload_json,'$.rows') row WHERE p.state='preview' AND json_type(row.value,'$.stage')='object' ORDER BY p.id,row.key")?;
     for row in query.query_map([], |row| row.get::<_, String>(0))? {
-        metadata_stage(locations, root, &row?, true)?;
+        metadata_stage(locations, root, &row?, true, true)?;
     }
     // Bind native identities for the entire retained tree, including workspace
     // directories used to reopen Undo artifacts after a same-installation restore.
@@ -1866,13 +1893,13 @@ mod inventory_phase_tests {
         (directory, library)
     }
     #[test]
-    fn schema_30_local_recovery_snapshot_retains_unresolved_records() {
+    fn schema_31_local_recovery_snapshot_retains_unresolved_records() {
         let (directory, library) = fixture();
         library.conn().unwrap().execute("INSERT INTO tracks(id,path,source_hash,title,state,created,updated) VALUES('unresolved',NULL,NULL,'Offline imported track','ready',0,0)",[]).unwrap();
         let saved = library
             .create_library_backup(&directory.path().join("backups"))
             .unwrap();
-        assert_eq!(saved.schema, 30);
+        assert_eq!(saved.schema, 31);
         assert_eq!(saved.tracks, 2);
         assert_eq!(saved.missing_sources, 1);
         let inspected = library.inspect_library_backup(&saved.path).unwrap();

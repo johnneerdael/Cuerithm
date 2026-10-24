@@ -168,13 +168,21 @@ and its error lists the files that are already in the Trash; their records were 
 appear in Missing & broken. A restart after an interruption lists the same files.
 
 `undoMerge(operationId, operationIdToUndo)` uses a new reverse file journal and
-restores the exact original file bytes plus the captured library/cue/tag/member
-state. For a delete merge it restores the removed library records (every row that
+restores the captured library/cue/tag/member state. The library keeps no copy of the
+audio: a donor tag copy records the keeper's tag values from before and after the copy
+(`transfers`), and Undo writes the "before" values back through the same checked transfer
+that made the copy, so the audio stays what it is. It refuses (`Later tag edits prevent
+Undo`) when the file's tags are no longer the recorded "after" values. A merge that was
+made by an earlier version and still holds a retained original is undone from that copy
+once; the copy is deleted when the merge is undone or leaves the Undo window. For a delete
+merge it restores the removed library records (every row that
 depends on them, found through the schema's foreign keys), their playlist positions
 and metadata; it cannot take a file out of the Trash. The removed records are kept
 only for the newest ten removals (`undo_limit`), duplicate merges that delete files and
 Missing & broken removals counted together; older entries keep their summary, report
-`undo_expired` and refuse Undo, so the removal is final. Undo is refused, before any
+`undo_expired` and refuse Undo, so the removal is final. Archive-only merges and every
+other committed merge count in the same window: a merge that leaves it frees its recorded
+tag values and the covers it holds. Undo is refused, before any
 file is staged, when a removed track's identity or file location is already used by
 another track, or when a different file now sits where a removed track's file was.
 `links_not_restored` counts the sync and DJ-program link rows that were left as they are
@@ -298,69 +306,82 @@ duplicate. Ambiguous cases, such as true duplicates, are left to Duplicates and 
 Use `previewUnusedRemoval(operationId, scanId, selectedIds)` with IDs from a
 complete, fresh unused-file report. The persisted preview returns the exact
 selected files, the first present Lexicon-style Serato/VirtualDJ sibling, hashes,
-roles and total bytes. It accepts no arbitrary source paths. Show all preview
-entries, including siblings, before the explicit removal action.
+roles and total bytes, and marks each file `permanent` when the operating system
+Trash cannot be expected to take it (`FileTrash::can_trash`: a network share, a
+read-only volume, or a volume where the Trash already refused a file in this run). It
+accepts no arbitrary source paths. Show all preview entries, including siblings, and
+name the `permanent` ones, before the explicit removal action.
 
-`applyUnusedRemoval(operationId, previewId)` captures and flushes verified
-original backups before recording a prepared operation. It rechecks the scan,
-current references (including archived records and physical aliases), source
-identities, root containment and shared destination reservations. Same-volume,
-no-replace moves precede the final journal/preview-consumption commit. Scanning,
-normal preparation and duplicate merging never call this method automatically.
-The action changes no track metadata, jobs, analysis, cues or playlist membership.
+`applyUnusedRemoval(operationId, previewId)` moves the files to the Trash or Recycle Bin.
+**The library keeps no copy of any file.** It rechecks the scan, current references
+(including archived records and physical aliases), source identities, root containment and
+shared destination reservations, then works in two journaled steps:
 
-`unusedRemovalHistory()` discovers operations and recoverable backups after
-restart. `restoreUnusedRemoval(operationId, removalId)` stages the original bytes
-and restores only unoccupied original paths. It refuses altered/missing backups
-and newer files at those paths. A successful restore marks the removal undone;
-a repeated restore is rejected. Both operations use the existing native task
-lease/cancellation protocol and emit maintenance/library change events.
+1. Each file is moved, same volume and no replace, to a hidden `.cuerithm-unused-*.tmp`
+   name beside it, and the journal (paths, identities and hashes only) is committed
+   together with the consumed preview.
+2. Each file is then given its own name back (a free spare name such as
+   `name (removed 1).ext` if something else took it) and handed to `FileTrash`, one at a time.
+   The journal records the name before the rename and the result after the Trash has
+   answered. Immediately before the Trash call the file must still be the approved one
+   (same file on disk, same hash); a file edited in the meantime is left where it is.
 
-Interrupted prepared operations roll back on startup. A later user file stays
-in place and yields a visible conflict with the captured source/backups retained.
-Unresolved recovery reserves its source against another removal, tagging,
-cleanup or donor publication. Missing recovery storage does not prevent library
-access. `retryUnusedRecovery(operationId, journalId)` retries guarded recovery
-after the conflicting source or storage is resolved. Never hide `state`, `error`
-or `cleanup_pending`; a failed action may require history refresh.
+The result lists one outcome per file (`outcomes`): `trashed`, `deleted` (permanent,
+only for a file the preview marked `permanent`, and only after the Trash refused it),
+`left_in_place` (the Trash refused it and it was not marked: the file is where it was,
+with the reason) or `gone` (no longer where the removal put it when an interruption was
+resumed). There is no Restore: the user puts a file back from the Trash with the operating
+system.
 
-Schema10 prevents older readers from opening journals that include parent-folder
-restoration or backup disposal. Version1 file-removal journals remain readable.
-These operations also recover in builds without catalog tagging support.
+`unusedRemovalHistory()` lists operations and their outcomes after restart; the newest
+twenty settled removals are kept, older ones are dropped (a removal that is not finished,
+or that still holds a copy an earlier version kept, is never dropped).
+
+Interrupted prepared operations roll back when the library opens. A later user file stays
+in place and yields a visible conflict with the captured source retained. A removal that
+had already committed is finished by `resume_unused_removals(trash)`, which the host runs
+after the library has opened (opening alone never touches the Trash); it is also what
+`retryUnusedRecovery(operationId, journalId)` does for one operation. Unresolved recovery
+reserves its source against another removal, tagging, cleanup or donor publication.
+Never hide `state`, `error` or `cleanup_pending`.
 
 Previews include `directories` and explicit `folder_metadata` entries when parent
 cleanup would remove `.DS_Store` or `Thumbs.db`. Folder planning follows selected
 primary-file/sidecar order. It preserves cover art and the reviewed root. Cleanup
-removes only reviewed empty parents, never recurses, and leaves a parent containing
-new files alone. Restore recreates missing parents shallow-first and restores
-captured permissions; it preserves existing replacement directories. Restart
-rolls back owned folder creation when an interrupted restore has not committed.
+removes only reviewed empty parents once their files are gone, never recurses, and
+leaves a parent containing new files (or a file the Trash refused) alone.
 
-### Retained originals and disposal
+### Copies kept by earlier versions
 
-`unusedRemovalHistory()` supplies `restore_available` as history eligibility;
-actual restore still validates current paths, backup contents and reservations.
-Backups occupy application storage until the user chooses to dispose of them.
+Earlier versions deleted the file and kept a copy in `maintenance/removal/remove-*/original-N`
+for a Restore button, with a separate explicit "disposal". Both are gone. `resume_unused_removals`
+also moves what is left from those versions, at most 50 removals per start: the copy of a
+removal that still stands goes to the Trash under the file's own name (it is the only copy
+left, so it is not deleted); the copy of a removal that was restored or rolled back is deleted
+(the file is back in place). A copy is found by its content hash, not its name, and only a
+regular file inside the removal folder of the data folder is touched (never a link). A copy
+the Trash refuses stays for the next start. Half-done disposal journals are dropped. The
+journals of those removals stay readable (`unused-removal-v1` and `-v2`).
 
-`previewBackupDisposal(operationId, removalIds)` returns the exact owned backup
-files, total bytes and `restores_lost` IDs. Select original removal operations,
-including already-restored operations, rather than reverse-journal IDs. Related
-restore rows share one backup set and are counted once. Show the loss of Restore
-before invoking the explicit irreversible `disposeBackups(operationId, previewId)`
-action. A scan, normal preparation, duplicate merge or file removal never invokes
-backup disposal automatically.
+## What the library keeps
 
-Disposal requires unchanged related history and backup identities. A durable
-prepared journal precedes moves within recovery storage; committed disposal marks
-related originals unavailable for Restore before deleting verified retired copies.
-A restore after preview invalidates that preview. Recovery returns backups on a
-pre-commit interruption and finishes cleanup after a committed interruption.
-Later backup versions are preserved as visible conflicts. No music path is
-deleted, restored or rewritten by disposal.
+The library holds tags, links to files and artwork, never audio. This is what is kept beyond
+that, and for how long. `docs/development/lean-library-audit.md` has the full table with sizes.
 
-Use `backupDisposalHistory()` and `retryBackupDisposal(operationId, disposalId)`
-for failures or incomplete cleanup. Always surface `state`, `error` and
-`cleanup_pending`. `size_bytes` is the reviewed backup amount; incomplete cleanup
-is not proof those bytes were released. Filesystem snapshots and clones may also
-retain physical storage after logical file removal. Branded views remain
-user-owned; their confirmation and final live-library acceptance remain required.
+| What | Bound |
+|---|---|
+| Undo of a removal (duplicate merge that deletes files, Missing & broken removal) and of a merge | the newest ten (`REMOVAL_UNDO_LIMIT`), all merges counted; the saved records and covers are freed when one leaves |
+| Undo of a manual cleanup | the newest ten applied batches; it restores recorded tag values, written through the checked write path |
+| Undo of a metadata edit | the newest ten; recorded values plus the replaced artwork (artwork is allowed), no audio |
+| Original audio of a tag write | only while the write is under way; deleted when it settles. Earlier versions' copies are deleted once, 500 journals per start, only files the application created |
+| Saved scans, reviews and previews (`maintenance_scans`) | the newest 3 of each kind, never one a kept plan or an unfinished removal still needs; pruned when one is saved and when the library opens |
+| History of unused-file removals | the newest 20 settled |
+| Rekordbox and other DJ-program syncs | restore data for the newest ten syncs of each target; an older one keeps a summary (`restore_available: false` / `restore_expired`) |
+| DJ-library record copies (`native_records`, `native_track_links`) | a hash for every record; the content only of the four playlist and MyTag tables and of tracks linked to a library track |
+| Caches | waveforms and cover art are rebuilt on demand and removed with the content they belong to |
+| SQLite write-ahead log | `journal_size_limit` 16 MiB, autocheckpoint every 1000 pages, a `TRUNCATE` checkpoint when the library opens, after a large import and on a clean exit |
+| Free pages in `library.sqlite` | new libraries use incremental auto-vacuum; an older one is converted once by a single `VACUUM` when it opens (only when the live data is up to 512 MiB, about a second, and the disk has room for three times that plus 256 MiB; `reclaim_storage` converts up to 2 GiB on request, and no app command calls it yet), then freed in bounded steps |
+
+Removing a track record purges everything derived from it (`maintenance/purge.rs` is the one
+list; `tests/removal_engine.rs` enumerates the schema and fails for a table that names a
+track and is neither saved for Undo nor purged).

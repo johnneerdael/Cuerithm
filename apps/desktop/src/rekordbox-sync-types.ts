@@ -17,7 +17,7 @@ export interface RekordboxEntityChange {local_id:string;kind:RekordboxEntityKind
 export interface RekordboxPendingEntity {kind:RekordboxEntityKind;name:string;unresolved_members:number;member_titles:string[]}
 export interface RekordboxSyncPreview {id:string;target_id:string;library_revision:number;fields:RekordboxSyncFieldReview[];entity_changes:RekordboxEntityChange[];pending_entities:RekordboxPendingEntity[];tracks:number;changed_rows:number;skipped_fields:number;warnings:string[];can_apply:boolean;media_copies:number;copied_audio_bytes:number}
 export interface RekordboxSyncOutcome {id:string;status:string;tracks:number;changed_rows:number;acknowledged_fields:number;skipped_fields:number}
-export interface RekordboxSyncHistoryEntry {id:string;target_id:string;status:string;created:number;updated:number;outcome:RekordboxSyncOutcome|null}
+export interface RekordboxSyncHistoryEntry {id:string;target_id:string;status:string;created:number;updated:number;outcome:RekordboxSyncOutcome|null;restore_available?:boolean}
 export interface RekordboxBridge extends SyncConfigurationBridge {
  configure:(request:RekordboxManualTarget)=>Promise<RekordboxSyncTarget>;
  discover:()=>Promise<RekordboxSyncTarget[]>;

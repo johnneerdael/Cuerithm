@@ -54,7 +54,7 @@ Genre mapping follows chains to the end, rejects cycles, and collapses duplicate
 
 1. **Scan** reads the files in scope and runs the engine. It writes nothing. The preview lists proposals and the counts of unchanged and unavailable tracks. The scope is **All ready tracks** or the selection you opened Cleanup with.
 2. **Apply** stages each changed file, writes the new tags there, reads them back and checks they equal what was intended. It then publishes with the same atomic, journaled swap as [tag writing](tag-writing.md), together with the library metadata. Each track is independent: a conflict or failure on one does not stop the others.
-3. **Undo** restores the original bytes and metadata when the file still matches what the apply produced. If it does not, your newer edit is kept and the track is reported as a conflict. See [Undo a cleanup](../tagging/undo-cleanup.md).
+3. **Undo** writes back the tags and metadata recorded before the apply when the file still matches what the apply produced. If it does not, your newer edit is kept and the track is reported as a conflict. See [Undo a cleanup](../tagging/undo-cleanup.md).
 
 A value that a tag format cannot hold is reported per track as a failure, not truncated.
 

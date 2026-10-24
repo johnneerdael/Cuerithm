@@ -567,6 +567,10 @@ impl Library {
             self.conn()?
                 .execute("UPDATE tag_writes SET cleanup_complete=1 WHERE id=?1", [id])?;
         }
+        // An Incoming save that was just written no longer needs the original audio it kept,
+        // and may push an older one out of the window of ten saves that can be undone.
+        let _ = self.prune_metadata_undo();
+        let _ = self.retire_incoming_originals();
         Ok(())
     }
     pub(crate) fn replay_checkpoint_tag_write(&self, run: &JobRun, id: &str) -> Result<()> {

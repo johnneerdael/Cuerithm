@@ -386,7 +386,7 @@ fn pending_entities(
     reserved: &BTreeMap<String, String>,
 ) -> Result<Vec<RekordboxPendingEntity>> {
     let connection = library.conn()?;
-    let mut mapped = connection.prepare("SELECT local_track_id FROM native_track_links WHERE target_id=?1 AND status='linked' AND observation_json IS NOT NULL AND local_track_id IS NOT NULL GROUP BY local_track_id HAVING COUNT(*)=1")?
+    let mut mapped = connection.prepare("SELECT local_track_id FROM native_track_links WHERE target_id=?1 AND status='linked' AND observation_hash IS NOT NULL AND local_track_id IS NOT NULL GROUP BY local_track_id HAVING COUNT(*)=1")?
         .query_map([target], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<BTreeSet<_>>>()?;
     mapped.extend(reserved.keys().cloned());
